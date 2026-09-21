@@ -134,7 +134,7 @@ def generate_simple_siouxfalls(mode = 'test'):
 
     else:
         n_links = np.inf
-        output_file = 'Each_iteration.csv'
+        output_file = 'Sioux_Falls_travel_time.csv'
 
         print('This is not test mode')
         response = input('Proceed? (yes/no): ')

@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy.io import savemat
-from traveltimecal import load_network_data, traveltimecal
+from traveltimecal import traveltimecal
 
 def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, nchoice, rposition, bigloop, dsize, num_tdlink_rows):
     onlylike0 = []
@@ -336,3 +336,6 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
         )
 
     return rtchoice, updaterposition, tt, b, p_agent
+
+def comrealtimeassignment():
+    pass
