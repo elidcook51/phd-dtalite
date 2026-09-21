@@ -202,7 +202,7 @@ def msa(bigloop, p, p_fix, p_realtime):
         )
 
         subprocess.run(
-            [r"LOCATION OF DTALITE"], check = False
+            [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
         )
 
         shutil.copyfile(
@@ -282,7 +282,7 @@ def msa(bigloop, p, p_fix, p_realtime):
     pd.DataFrame(inputagent, columns = columns).to_csv('input_agent.csv')
 
     subprocess.run(
-        ['FILEPATH TO DTALIE'], check = False
+        [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
     )
 
     shutil.copyfile(
@@ -333,7 +333,9 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     pd.DataFrame(inputagent, columns=columns).to_csv('input_agent.csv', index = False)
 
-    subprocess.run('LINK TO DTALITE', check = False)
+    subprocess.run(
+        [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
+    )
 
     shutil.copyfile(
         'output_agent.csv',

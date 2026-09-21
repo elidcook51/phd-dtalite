@@ -1106,7 +1106,9 @@ def comassignment(
             ],
         ).to_csv("input_agent.csv", index=False)
 
-        #RUN DTALITE
+        subprocess.run(
+            [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
+        )
 
     return (
         final_choice,
