@@ -29,7 +29,6 @@ def dividerand(driver_ids, p, p_realtime, p_fix):
 def msa(bigloop, p, p_fix, p_realtime):
 
     temp_agent_data = pd.read_csv('input_agent_initial.csv')
-    actual_rows = len(temp_agent_data)
 
     inputagent = temp_agent_data.values.tolist()
 
