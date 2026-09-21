@@ -21,6 +21,7 @@ def generate_simple_baltimore(mode = 'test'):
         response = input('Proceed? (yes/no): ')
         if response.lower() != 'yes':
             print('Cancelled.')
+            return
 
     print('-' * 65)
     print()
@@ -91,7 +92,7 @@ def generate_simple_baltimore(mode = 'test'):
                 rows_written += 1
 
         if ((chunk_idx + 1) % 10 == 0) or ((chunk_idx + 1) == n_chunks):
-            elapsed = time.time - start_clock
+            elapsed = time.time() - start_clock
 
             pct_done = 100 * rows_written / total_rows
 
@@ -129,7 +130,7 @@ def generate_simple_siouxfalls(mode = 'test'):
     if mode == 'test':
         n_links = 100
         end_time = 420
-        output_file = 'Each_iteration_test.csv'
+        output_file = 'Sioux_Falls_test_travel_time.csv'
 
     else:
         n_links = np.inf
@@ -139,19 +140,20 @@ def generate_simple_siouxfalls(mode = 'test'):
         response = input('Proceed? (yes/no): ')
         if response.lower() != 'yes':
             print('Cancelled.')
+            return
 
     print('-' * 65)
     print()
 
     links = pd.read_excel('SiouxFalls_network.xlsx', skiprows = 7)
 
-    links = links[links['~'].notna()]
+    links = links[pd.to_numeric(links['Init node'], errors = 'coerce').notna()]
 
     links_clean = pd.DataFrame({
-        'from_node_id': links['Init Node'],
-        'to_node_id': links.iloc[:, 1],
-        'length': links.iloc[:, 3],
-        'travel_time': links.iloc[:, 4]
+        'from_node_id': links['Init node'],
+        'to_node_id': links['Term node'],
+        'length': links['Length'],
+        'travel_time': links['Free flow time']
     })
 
     links_clean['speed'] = (links_clean['length'] / links_clean['travel_time']) * 60
@@ -211,7 +213,7 @@ def generate_simple_siouxfalls(mode = 'test'):
                 rows_written += 1
 
         if ((chunk_idx + 1) % 10 == 0) or ((chunk_idx + 1) == n_chunks):
-            elapsed = time.time - start_clock
+            elapsed = time.time() - start_clock
 
             pct_done = 100 * rows_written / total_rows
 
