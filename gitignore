@@ -1,4 +1,12 @@
-.venv
+# Data files
 *.csv
 *.mat
 *.xlsx
+
+# Python
+__pycache__/
+*.pyc
+
+# MATLAB
+*.asv
+.venv
