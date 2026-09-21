@@ -6,7 +6,7 @@
 # Python
 __pycache__/
 *.pyc
+*.venv
 
 # MATLAB
 *.asv
-.venv
