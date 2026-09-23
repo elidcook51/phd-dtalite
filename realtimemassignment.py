@@ -29,67 +29,19 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
         agentpath = T.iloc[:, 29].tolist()
 
     if itr == 1:
-        TDlink = np.column_stack(
-            [pd.read_excel(
-                'DTALite_Files/Each iteration.csv',
-                sheet_name = 0,
-                usecols = 'A',
-                skiprows = 1,
-                nrows = num_tdlink_rows,
-            ).to_numpy().flatten(),
-            pd.read_excel(
-                'DTALite_Files/Each iteration.csv',
-                sheet_name = 0,
-                usecols = 'B',
-                skiprows = 1,
-                nrows = num_tdlink_rows,
-            ).to_numpy().flatten(),
-            pd.read_excel(
-                'DTALite_Files/Each iteration.csv',
-                sheet_name = 0,
-                usecols = 'E',
-                skiprows = 1,
-                nrows = num_tdlink_rows,
-            ).to_numpy().flatten(),
-            pd.read_excel(
-                'DTALite_Files/Each iteration.csv',
-                sheet_name = 0,
-                usecols = 'F',
-                skiprows = 1,
-                nrows = num_tdlink_rows,
-            ).to_numpy().flatten(),]
+        td_df = pd.read_csv(
+            'DTALite_Files/Each iteration.csv',
+            nrows=num_tdlink_rows
         )
+
+        TDlink = td_df.iloc[:, [0, 1, 4, 5]].to_numpy()
     else:
-        TDlink = np.column_stack([
-            pd.read_excel(
-                'output_linkTMOE.csv',
-                sheet_name = 0,
-                usecols = 'A',
-                skiprows = 1,
-                nrows = num_tdlink_rows,
-            ).to_numpy().flatten(),
-            pd.read_excel(
-                'output_linkTMOE.csv',
-                sheet_name = 0,
-                usecols = 'B',
-                skiprows = 1,
-                nrows = num_tdlink_rows,
-            ).to_numpy().flatten(),
-            pd.read_excel(
-                'output_linkTMOE.csv',
-                sheet_name = 0,
-                usecols = 'E',
-                skiprows = 1,
-                nrows = num_tdlink_rows,
-            ).to_numpy().flatten(),
-            pd.read_excel(
-                'output_linkTMOE.csv',
-                sheet_name = 0,
-                usecols = 'F',
-                skiprows = 1,
-                nrows = num_tdlink_rows,
-            ).to_numpy().flatten(),
-        ])
+        td_df = pd.read_csv(
+            'output_linkTDMOE.csv',
+            nrows=num_tdlink_rows
+        )
+
+        TDlink = td_df.iloc[:, [0, 1, 4, 5]].to_numpy()
 
     b = TDlink[:, 0]
 
@@ -110,27 +62,33 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
     for h in range(len(choiceset[0])):
         for i in range(len(choiceset)):
 
-            if not choiceset[i]:
+            path = choiceset[i, h]
+
+            if (
+                path is None
+                or (isinstance(path, np.ndarray) and path.size == 0)
+                or path == ""
+            ):
                 continue
 
             sque = choiceset[i][h].split(';')
 
-            index = []
-            for j in range(len(sque) - 1):
-                index.append(float(sque[j]))
+            nodes = [
+                int(x)
+                for x in path.split(";")
+                if x.strip()
+            ]
 
-                index = np.array(index)
+            for n1, n2 in zip(nodes[:-1], nodes[1:]):
+                pl = np.where(
+                    (length[:,0] == n1) &
+                    (length[:,1] == n2)
+                )[0]
 
-                for j in range(len(index) - 1):
-                    pl = np.where(
-                        (length[:,0] == index[j]) & 
-                        (length[:,1] == index[j + 1])
-                    )[0]
+                if len(pl) > 0:
+                    len_arr[i,h] += length[pl[0],2]
 
-                    if len(pl) > 0:
-                        len_arr[i, h] += length[pl[0], 2]
-
-            nc[i, h] = len(index) - 1
+            nc[i,h] = len(nodes) - 1
 
     gas = 3
 
@@ -143,9 +101,13 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
     for h in range(len(choiceset[0])):
         for i in range(len(choiceset)):
 
-            path = choiceset[i][h]
+            path = choiceset[i, h]
 
-            if not path:
+            if (
+                path is None
+                or (isinstance(path, np.ndarray) and path.size == 0)
+                or path == ""
+            ):
                 continue
 
             m = 1
@@ -206,7 +168,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
 
                     else:
                         ttloc = np.where(
-                            np.floor(agentn[:, 1] == (k + 899))
+                            np.floor(agentn[:, 1]) == (k + 899)
                         )[0]
 
                     if len(ttloc) == 0:
@@ -271,14 +233,14 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
 
         if agent_id not in realtime_user:
 
-            rtchoice[i, 0] = nchoice[agent_id + 1, 0]
-            updaterposition[i, 0] = rposition[agent_id + 1, 0]
+            rtchoice[i, 0] = nchoice[agent_id, 0]
+            updaterposition[i, 0] = rposition[agent_id, 0]
 
         else:
 
             ff = np.where(
-                (routelocation[:, 0] == agentOD[agent_id + 1, 0]) & 
-                (routelocation[:, 1] == agentOD[agent_id + 1, 1])
+                (routelocation[:, 0] == agentOD[agent_id, 0]) & 
+                (routelocation[:, 1] == agentOD[agent_id, 1])
             )[0]
 
             f = int(routelocation[ff[0], 3])
@@ -308,14 +270,14 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
                     nc[j,f]
                 ]
 
-                if b0[1] < b1:
+                if b0[1] < b1[1]:
                     choice = 0
                 else:
                     choice = 1
 
                 if choice == 0:
                     b1 = b0
-                    croute = j + 1
+                    croute = j
 
             rtchoice[i, 0] = croute
             updaterposition[i, 0] = f
@@ -361,7 +323,7 @@ def comrealtimeassignment(
     # --------------------------------------------------
     # Read agent information
     # --------------------------------------------------
-    S = pd.read_csv("input_agent_initial.csv")
+    S = pd.read_csv("DTALite_Files/input_agent_initial.csv")
 
     agent = np.zeros((len(S), 2))
     agent[:, 0] = S.iloc[:, 0]
@@ -381,7 +343,7 @@ def comrealtimeassignment(
     # Read TD link information
     # --------------------------------------------------
     if itr == 1:
-        td_df = pd.read_excel(
+        td_df = pd.read_csv(
             "Each iteration.csv",
             usecols=[0, 1, 4, 5]
         )
@@ -610,8 +572,8 @@ def comrealtimeassignment(
 
         pre_b1 = b1.copy()
 
-        croute = 1
-        pre_croute = 1
+        croute = 0
+        pre_croute = 0
 
         for j in range(1, n_routes):
 
@@ -671,10 +633,10 @@ def comrealtimeassignment(
 
             if choice != 1:
                 b1 = b0
-                croute = j + 1
+                croute = j
 
-            if pre_b1[1] >= pre_b0:
-                pre_croute = j + 1
+            if pre_b1[1] >= pre_b0[1]:
+                pre_croute = j
                 pre_b1 = pre_b0
 
         rtchoice[i] = croute
