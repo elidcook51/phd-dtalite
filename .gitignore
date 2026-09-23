@@ -2,11 +2,13 @@
 *.csv
 *.mat
 *.xlsx
+*.txt
 
 # Python
 __pycache__/
 *.pyc
 *.venv
+*.exe
 
 # MATLAB
 *.asv

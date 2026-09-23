@@ -5,7 +5,7 @@ from scipy.sparse import csr_matrix
 from pathlib import Path
 import subprocess
 import pickle
-from traveltimecal import traveltimecal
+from traveltimecal import traveltimecal, traveltimecal_fast
 from realtimemassignment import realtimeassignment, comrealtimeassignment
 
 #Need input_agent.csv, output_agent.csv
@@ -19,7 +19,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
     ttt = 0
 
     if itr == 1:
-        S = pd.read_csv('input_agent.csv')
+        S = pd.read_csv('DTALite_Files/input_agent.csv')
 
         agent = np.column_stack([
             S.iloc[:, 0],
@@ -33,7 +33,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         agentpath = None
 
-        TDlink_table = pd.read_csv('Each iteration.csv')
+        TDlink_table = pd.read_csv('DTALite_Files/Each iteration.csv')
 
     else:
         T = pd.read_csv('output_agent.csv')
@@ -57,16 +57,14 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
     TDlink = TDlink_table.iloc[:, [0,1,4,5]].to_numpy()
 
-    link_data = loadmat('baltimore_link_data.mat', simplify_cells = True)
-
-    link_lengths = link_data['link_data']
+    link_lengths = pd.read_excel('DTALite_Files/SiouxFalls_net.xlsx', sheet_name = 0, usecols = 'B:E', skiprows = 89, nrows = 76).to_numpy()
 
     max_node = int(np.max(link_lengths[:,0:2]))
 
     row_idx = link_lengths[:,0].astype(int)
     col_idx = link_lengths[:,1].astype(int)
 
-    data = np.arange(1, len(link_lengths)+1)
+    data = np.arange(len(link_lengths))
 
     link_lookup = csr_matrix(
         (data, (row_idx, col_idx)),
@@ -95,14 +93,14 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
     ncols = choiceset.shape[1]
 
     route_length = np.zeros((nrows, ncols))
-    nc = np.zeros((nrows, ncols))
+    nc = np.zeros((nrows, ncols)) 
 
     for col in used_columns:
         for i in range(nrows):
 
             path = choiceset[i, col]
 
-            if path is None or path == "":
+            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "":
                 continue
 
             nodes = [
@@ -138,6 +136,11 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
             path = choiceset[i, col]
 
+            if isinstance(path, np.ndarray):
+                if path.size == 0:
+                    continue
+                path = path.item()
+
             if path is None or path == "":
                 continue
 
@@ -148,7 +151,8 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             for k in range(60):
                 departure_time = k + 899
 
-                travel_time, fuel = traveltimecal(
+                print("Running traveltimecal_fast")
+                travel_time, fuel = traveltimecal_fast(
                     departure_time,
                     TDlink,
                     path,
@@ -196,6 +200,10 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             rposition[i] = f
 
             continue
+
+        print("used_columns =", used_columns)
+        print("f =", f)
+        print("first few tt keys:", list(tt.keys())[:20])
 
         if i in member:
 
@@ -400,6 +408,17 @@ def fixedcomassignment(
     
     length_data = links[['from_node_id', 'to_node_id', 'length', 'free_speed']].to_numpy()
 
+    max_node = int(np.max(length_data[:,0:2]))
+
+    row_idx = length_data[:, 0].astype(int)
+    col_idx = length_data[:,1].astype(int)
+    data = np.arange(len(length_data))
+
+    link_lookup = csr_matrix(
+        (data, (row_idx, col_idx)),
+        shape = (max_node+1, max_node+1)
+    )
+
     num_routes = len(choiceset)
     num_columns = len(choiceset[0])
 
@@ -412,29 +431,26 @@ def fixedcomassignment(
 
             path = choiceset[i][h]
 
-            if path is None or path == "":
+            if (
+                path is None
+                or (isinstance(path, np.ndarray) and path.size == 0)
+                or path == ""
+            ):
                 continue
 
-            sque = path.split(";")
+            nodes = [int(x) for x in path.split(';') if x.strip()]
 
-            index = [
-                int(x)
-                for x in sque
-                if str(x).strip() != ""
-            ]
+            if len(nodes) < 2:
+                continue
 
-            for j in range(len(index) - 1):
+            for n1, n2 in zip(nodes[:-1], nodes[1:]):
+                if (0 < n1 <= max_node and 0 < n2 <= max_node):
+                    link_idx = link_lookup[n1, n2]
 
-                matches = np.where(
-                    (length_data[:, 0] == index[j]) &
-                    (length_data[:, 1] == index[j + 1])
-                )[0]
+                    if link_idx > 0:
+                        len_mat[i, h] += length_data[int(link_idx)-1,2]
 
-                if len(matches) > 0:
-                    pl = matches[0]
-                    len_mat[i, h] += length_data[pl, 2]
-
-            nc[i, h] = len(index) - 1
+            nc[i, h] = len(nodes) - 1
 
     # ============================================================
     # Travel time, planning time, fuel cost

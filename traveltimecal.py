@@ -59,7 +59,8 @@ def traveltimecal(timestamp, TDlink, path, length_data, gas, itr, empty):
 
         for i in range(len(index) - 1):
             from_node = index[i]
-            to_node = index[i + 3]
+
+            to_node = index[i + 1]
 
             key = f"{int(np.floor(timestamp + m))}_{from_node}_{to_node}"
 
@@ -88,12 +89,12 @@ def traveltimecal(timestamp, TDlink, path, length_data, gas, itr, empty):
             po = np.where(
                 (length_data[:, 0] == from_node) &
                 (length_data[:, 1] == to_node)
-            )
+            )[0]
 
             if len(po) > 0:
-                row = po[0]
+                row = int(po[0])
 
-                length_val = length_data[row, 2]
+                length_val = float(length_data[row, 2])
                 speed = length_val / travel_time * 60
 
                 if speed > 40:
