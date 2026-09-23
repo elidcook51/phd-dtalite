@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy.io import savemat
-from traveltimecal import load_network_data, traveltimecal
+from traveltimecal import traveltimecal
 
 def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, nchoice, rposition, bigloop, dsize, num_tdlink_rows):
     onlylike0 = []
@@ -411,7 +411,10 @@ def comrealtimeassignment(
     # --------------------------------------------------
     # Route attributes
     # --------------------------------------------------
-    length_data, gas = load_network_data()
+    gas = 3.0
+    links = pd.read_csv('input_link.csv')
+    
+    length_data = links[['from_node_id', 'to_node_id', 'length', 'free_speed']].to_numpy()
 
     n_routes = len(choiceset)
     n_ods = len(choiceset[0])

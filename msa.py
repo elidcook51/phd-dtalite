@@ -28,66 +28,64 @@ def dividerand(driver_ids, p, p_realtime, p_fix):
 
 def msa(bigloop, p, p_fix, p_realtime):
 
-    temp_agent_data = pd.read_csv('input_agent_initial.csv')
+    temp_agent_data = pd.read_csv('DTALite_Files/input_agent_initial.csv')
 
     inputagent = temp_agent_data.values.tolist()
 
     dsize = len(inputagent)
 
-    temp_tdlink = pd.read_csv('Each iteration.csv')
+    temp_tdlink = pd.read_csv('DTALite_Files/Each iteration.csv')
     num_tdlink_rows = len(temp_tdlink) - 1
-
-    pd.read_excel(
-        'Baltimore_Bridge_net.xlsx',
-        sheet_name = 'Sheet1'
-    )
-
-    links = np.zeros((100, 12))
 
     driver_ids = np.arange(dsize)
     member, realtime_user, fix_user = dividerand(driver_ids, p, p_realtime, p_fix)
 
-    mat = loadmat('choice_set_baltimore_bridge.mat', simplify_cells = True)
+    mat = loadmat('DTALite_Files/choice set no overlap try.mat', simplify_cells = True)
 
-    choiceset = mat['finallist']
+    choiceset = mat['finallist'].T
 
     routelocation = []
 
-    for col_idx, route_string in enumerate(choiceset):
-        parts = str(route_string).split(';')
+    for row_idx in range(choiceset.shape[0]):
+        for col_idx in range(choiceset.shape[1]):
 
-        o = float(parts[0])
-        d = float(parts[-1])
+            route_string = choiceset[row_idx, col_idx]
 
-        routelocation.append([
-            o, d, 1, col_idx
-        ])
+            if not isinstance(route_string, str):
+                continue
+
+            parts = route_string.strip(';').split(';')
+
+            o = float(parts[0])
+            d = float(parts[-1])
+
+            routelocation.append([o,d,1,col_idx,row_idx])
 
     routelocation = np.array(routelocation)
 
     user = pd.read_excel(
-        'SiouxFalls_net.xlsx',
+        'DTALite_Files/SiouxFalls_net.xlsx',
         sheet_name=4,
         usecols = 'A:B',
         nrows = dsize
     ).values
 
     weights = pd.read_excel(
-        'SiouxFalls_net.xlsx',
+        'DTALite_Files/SiouxFalls_net.xlsx',
         sheet_name=5,
         usecols = 'A:F',
         skiprows = 5
     ).values
 
     realweights = pd.read_excel(
-        'SiouxFalls_net.xlsx',
+        'DTALite_Files/SiouxFalls_net.xlsx',
         sheet_name=5,
-        usecols = 'J"0',
+        usecols = 'J',
         skiprows = 5
     ).values
 
     meanstd28 = pd.read_excel(
-        'SiouxFalls_net.xlsx',
+        'DTALite_Files/SiouxFalls_net.xlsx',
         sheet_name =5,
         usecols = 'A:E',
         skiprows = 1,
@@ -95,7 +93,7 @@ def msa(bigloop, p, p_fix, p_realtime):
     ).values
 
     meanstd2 = pd.read_excel(
-        'SiouxFalls_net.xlsx',
+        'DTALite_Files/SiouxFalls_net.xlsx',
         sheet_name = 5,
         usecols = 'H:L',
         skiprows = 1,
@@ -125,6 +123,7 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     for itr in range(1, 3):
         print(f"Iteration {itr}")
+        print(f"Starting running assignment")
 
         (
             choice,

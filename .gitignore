@@ -8,6 +8,8 @@
 __pycache__/
 *.pyc
 *.venv
+*.exe
+*.zip
 
 # MATLAB
 *.asv
