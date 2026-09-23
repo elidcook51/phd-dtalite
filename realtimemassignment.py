@@ -245,15 +245,25 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
 
             po = itr * phlength
 
-            b1 = [
-                len_arr[0, f],
-                tt[0][f][po],
-                pltt[0][f][po],
-                fuelcost[0][f][po],
-                nc[0, f],
+            available_routes = [
+                r for r in range(len(choiceset))
+                if tt[r][f] is not None
             ]
 
-            croute = 1
+            if len(available_routes) == 0:
+                continue
+
+            best_route = available_routes[0]
+
+            b1 = [
+                len_arr[best_route, f],
+                tt[best_route][f][po],
+                pltt[best_route][f][po],
+                fuelcost[best_route][f][po],
+                nc[best_route, f],
+            ]
+
+            croute = best_route
 
             for j in range(1, len(choiceset)):
 
@@ -560,13 +570,25 @@ def comrealtimeassignment(
 
         po = itr * phlength
 
-        b1 = np.array([
-            len_mat[0, f],
-            tt[(0, f, po)],
-            pltt[(0, f, po)],
-            fuelcost[(0, f, po)],
-            nc[0, f]
-        ])
+        available_routes = [
+            r for r in range(len(choiceset))
+            if tt[r][f] is not None
+        ]
+
+        if len(available_routes) == 0:
+            continue
+
+        best_route = available_routes[0]
+
+        b1 = [
+            len_mat[best_route, f],
+            tt[best_route][f][po],
+            pltt[best_route][f][po],
+            fuelcost[best_route][f][po],
+            nc[best_route, f],
+        ]
+
+        croute = best_route
 
         pre_b1 = b1.copy()
 
