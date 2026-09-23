@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy.io import savemat
-from traveltimecal import traveltimecal
+from traveltimecal import traveltimecal, traveltimecal_fast
 
 def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, nchoice, rposition, bigloop, dsize, num_tdlink_rows):
     onlylike0 = []
@@ -10,7 +10,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
     ttt = 0
 
 
-    S = pd.read_csv('input_agent_initial.csv')
+    S = pd.read_csv('DTALite_Files/input_agent_initial.csv')
 
     agent = np.zeros((len(S), 2))
     agent[:, 0] = S.iloc[:,0].to_numpy()
@@ -31,28 +31,28 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
     if itr == 1:
         TDlink = np.column_stack(
             [pd.read_excel(
-                'Each iteration.csv',
+                'DTALite_Files/Each iteration.csv',
                 sheet_name = 0,
                 usecol = 'A',
                 skiprows = 1,
                 nrows = num_tdlink_rows,
             ).to_numpy().flatten(),
             pd.read_excel(
-                'Each iteration.csv',
+                'DTALite_Files/Each iteration.csv',
                 sheet_name = 0,
                 usecol = 'B',
                 skiprows = 1,
                 nrows = num_tdlink_rows,
             ).to_numpy().flatten(),
             pd.read_excel(
-                'Each iteration.csv',
+                'DTALite_Files/Each iteration.csv',
                 sheet_name = 0,
                 usecol = 'E',
                 skiprows = 1,
                 nrows = num_tdlink_rows,
             ).to_numpy().flatten(),
             pd.read_excel(
-                'Each iteration.csv',
+                'DTALite_Files/Each iteration.csv',
                 sheet_name = 0,
                 usecol = 'F',
                 skiprows = 1,
@@ -100,7 +100,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
         tdlink_map[key] = TDlink[r,3]
 
     gas = 3.0
-    links = pd.read_csv('input_link.csv')
+    links = pd.read_csv('DTALite_Files/input_link.csv')
 
     length = links[['from_node_id', 'to_node_id', 'length', 'free_speed']].to_numpy()
 
@@ -178,7 +178,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
 
                 if m == 1:
 
-                    tt_val, fuel_val = traveltimecal(
+                    tt_val, fuel_val = traveltimecal_fast(
                         k + 899,
                         TDlink,
                         choiceset[i][h],
@@ -211,7 +211,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
 
                     if len(ttloc) == 0:
 
-                        tt_val, fuel_val = traveltimecal(
+                        tt_val, fuel_val = traveltimecal_fast(
                             k + 899,
                             TDlink,
                             choiceset[i][h],
@@ -245,7 +245,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
                         tt[i][h][k] = np.mean(a)
                         pltt[i][h][k] = np.max(a)
 
-                        _, fuel_val = traveltimecal(
+                        _, fuel_val = traveltimecal_fast(
                             k + 899,
                             TDlink,
                             choiceset[i][h],
