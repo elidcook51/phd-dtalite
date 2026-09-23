@@ -201,23 +201,27 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
             continue
 
-        print("used_columns =", used_columns)
-        print("f =", f)
-        print("first few tt keys:", list(tt.keys())[:20])
-
         if i in member:
 
-            best_route = 0
+            available = [
+                r for r in range(nrows)
+                if (r, f) in tt
+            ]
+
+            if len(available) == 0:
+                continue
+
+            best_route = available[0]
 
             current = np.array([
-                route_length[0,f],
-                tt[(0,f)][po],
-                pltt[(0,f)][po],
-                fuelcost[(0,f)][po],
-                nc[(0,f)]
+                route_length[best_route,f],
+                tt[(best_route,f)][po],
+                pltt[(best_route,f)][po],
+                fuelcost[(best_route,f)][po],
+                nc[best_route,f]
             ])
 
-            for j in range(1, nrows):
+            for j in available[1:]:
 
                 if choiceset[j,f] is None:
                     continue
