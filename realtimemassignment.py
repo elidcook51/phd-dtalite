@@ -223,8 +223,8 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
     mask2 = (360 + phlength * (itr - 1)) < p_agent[:, 1]
     p_agent = p_agent[mask2]
 
-    rtchoice = np.zeros((p_agent.shape[0], 1))
-    updaterposition = np.zeros((p_agent.shape[0], 1))
+    rtchoice = np.zeros((p_agent.shape[0], 1), dtype = int)
+    updaterposition = np.zeros((p_agent.shape[0], 1), dtype = int)
 
     for i in range(p_agent.shape[0]):
         agent_id = int(p_agent[i, 0])
