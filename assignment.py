@@ -307,7 +307,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             inputagent[idx][11] = path
 
 
-        columns = ['agent_id', 'tour_id', 'from_zone_id', 'to_zone_id', 'from_origin_node_id', 'to_destination_node_id', 'demand_type', 'PCE', 'information_type', 'vehicle_age', 'path_node_sequence', 'vehicle_type', 'pricing_type', 'value_of_time']
+        columns = ['agent_id', 'tour_id', 'from_zone_id', 'to_zone_id', 'from_origin_node_id', 'to_destination_node_id','departure_time_in_min', 'demand_type', 'PCE', 'information_type', 'vehicle_age', 'path_node_sequence', 'vehicle_type', 'pricing_type', 'value_of_time']
 
         agent_df = pd.DataFrame(inputagent[:len(final_choice)], columns = columns)
 
