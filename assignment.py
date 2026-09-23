@@ -241,7 +241,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
                 utility = (
                     np.dot(
                         diff,
-                        weights[uid:5]
+                        weights[uid, :5]
                     )
                     + weights[uid,5]
                 )
