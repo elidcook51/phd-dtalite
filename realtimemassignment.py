@@ -54,7 +54,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
     gas = 3.0
     links = pd.read_csv('DTALite_Files/input_link.csv')
 
-    length = links[['from_node_id', 'to_node_id', 'length', 'free_speed']].to_numpy()
+    length = links[['from_node_id', 'to_node_id', 'length', 'Free flow time']].to_numpy()
 
     len_arr = np.zeros((len(choiceset), len(choiceset[0])))
     nc = np.zeros((len(choiceset), len(choiceset[0])))
