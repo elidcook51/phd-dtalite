@@ -134,11 +134,42 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
 
                 agentn = np.array(agentn) if agentn else np.empty((0,3))
 
-            for k in range(
-                itr * phlength, itr * phlength + 1,
-            ):
+            k = int(itr * phlength)
 
-                if m == 1:
+            if m == 1:
+
+                tt_val, fuel_val = traveltimecal_fast(
+                    k + 899,
+                    TDlink,
+                    choiceset[i][h],
+                    length,
+                    gas,
+                    itr,
+                    0
+                )
+
+                if tt[i][h] is None:
+                    tt[i][h] = {}
+                if pltt[i][h] is None:
+                    pltt[i][h] = {}
+                if fuelcost[i][h] is None:
+                    fuelcost[i][h] = {}
+
+                tt[i][h][k] = tt_val
+                pltt[i][h][k] = tt_val
+                fuelcost[i][h][k] = fuel_val
+
+            else:
+
+                if itr == 1:
+                    ttloc = np.array([])
+
+                else:
+                    ttloc = np.where(
+                        np.floor(agentn[:, 1]) == (k + 899)
+                    )[0]
+
+                if len(ttloc) == 0:
 
                     tt_val, fuel_val = traveltimecal_fast(
                         k + 899,
@@ -162,62 +193,29 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
                     fuelcost[i][h][k] = fuel_val
 
                 else:
+                    a = [agentn[idx, 2] for idx in ttloc]
 
-                    if itr == 1:
-                        ttloc = np.array([])
+                    if tt[i][h] is None:
+                        tt[i][h] = {}
+                    if pltt[i][h] is None:
+                        pltt[i][h] = {}
+                    if fuelcost[i][h] is None:
+                        fuelcost[i][h] = {}
 
-                    else:
-                        ttloc = np.where(
-                            np.floor(agentn[:, 1]) == (k + 899)
-                        )[0]
+                    tt[i][h][k] = np.mean(a)
+                    pltt[i][h][k] = np.max(a)
 
-                    if len(ttloc) == 0:
+                    _, fuel_val = traveltimecal_fast(
+                        k + 899,
+                        TDlink,
+                        choiceset[i][h],
+                        length,
+                        gas,
+                        itr,
+                        0
+                    )
 
-                        tt_val, fuel_val = traveltimecal_fast(
-                            k + 899,
-                            TDlink,
-                            choiceset[i][h],
-                            length,
-                            gas,
-                            itr,
-                            0
-                        )
-
-                        if tt[i][h] is None:
-                            tt[i][h] = {}
-                        if pltt[i][h] is None:
-                            pltt[i][h] = {}
-                        if fuelcost[i][h] is None:
-                            fuelcost[i][h] = {}
-
-                        tt[i][h][k] = tt_val
-                        pltt[i][h][k] = tt_val
-                        fuelcost[i][h][k] = fuel_val
-
-                    else:
-                        a = [agentn[idx, 2] for idx in ttloc]
-
-                        if tt[i][h] is None:
-                            tt[i][h] = {}
-                        if pltt[i][h] is None:
-                            pltt[i][h] = {}
-                        if fuelcost[i][h] is None:
-                            fuelcost[i][h] = {}
-
-                        tt[i][h][k] = np.mean(a)
-                        pltt[i][h][k] = np.max(a)
-
-                        _, fuel_val = traveltimecal_fast(
-                            k + 899,
-                            TDlink,
-                            choiceset[i][h],
-                            length,
-                            gas,
-                            itr,
-                            0
-                        )
-
-                        fuelcost[i][h][k] = fuel_val
+                    fuelcost[i][h][k] = fuel_val
 
     mask = agent[:, 1] <= (360 + phlength * itr)
     p_agent = agent[mask]
