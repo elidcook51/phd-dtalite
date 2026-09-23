@@ -33,28 +33,28 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
             [pd.read_excel(
                 'DTALite_Files/Each iteration.csv',
                 sheet_name = 0,
-                usecol = 'A',
+                usecols = 'A',
                 skiprows = 1,
                 nrows = num_tdlink_rows,
             ).to_numpy().flatten(),
             pd.read_excel(
                 'DTALite_Files/Each iteration.csv',
                 sheet_name = 0,
-                usecol = 'B',
+                usecols = 'B',
                 skiprows = 1,
                 nrows = num_tdlink_rows,
             ).to_numpy().flatten(),
             pd.read_excel(
                 'DTALite_Files/Each iteration.csv',
                 sheet_name = 0,
-                usecol = 'E',
+                usecols = 'E',
                 skiprows = 1,
                 nrows = num_tdlink_rows,
             ).to_numpy().flatten(),
             pd.read_excel(
                 'DTALite_Files/Each iteration.csv',
                 sheet_name = 0,
-                usecol = 'F',
+                usecols = 'F',
                 skiprows = 1,
                 nrows = num_tdlink_rows,
             ).to_numpy().flatten(),]
