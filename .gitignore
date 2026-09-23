@@ -2,6 +2,7 @@
 *.csv
 *.mat
 *.xlsx
+*.txt
 
 # Python
 __pycache__/
