@@ -314,6 +314,15 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         agent_df.to_csv('input_agent.csv', index = False)
 
+        import os
+
+        print("Python cwd =", os.getcwd())
+        print("Files in cwd:")
+        print(os.listdir())
+
+        print("Files in DTALite_Files:")
+        print(os.listdir("DTALite_Files"))
+
         start_time = time.time()
         print("Starting DTA Lite running!")
         subprocess.run(
