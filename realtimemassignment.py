@@ -231,8 +231,8 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
 
         if agent_id not in realtime_user:
 
-            rtchoice[i, 0] = nchoice[agent_id, 0]
-            updaterposition[i, 0] = rposition[agent_id, 0]
+            rtchoice[i, 0] = nchoice[agent_id]
+            updaterposition[i, 0] = rposition[agent_id]
 
         else:
 
@@ -543,8 +543,8 @@ def comrealtimeassignment(
 
         if agent_id not in realtime_user:
 
-            rtchoice[i] = nchoice[agent_id + 1]
-            updaterposition[i] = rposition[agent_id + 1]
+            rtchoice[i] = nchoice[agent_id]
+            updaterposition[i] = rposition[agent_id]
 
             continue
 
