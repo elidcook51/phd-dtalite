@@ -314,7 +314,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
         agent_df.to_csv('input_agent.csv', index = False)
 
         subprocess.run(
-            ['DTAlite.exe'], check = True
+            ['DTALite_Files/DTAlite.exe'], check = True
         )  
 
     savemat(
