@@ -151,7 +151,6 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             for k in range(60):
                 departure_time = k + 899
 
-                print("Running traveltimecal_fast")
                 travel_time, fuel = traveltimecal_fast(
                     departure_time,
                     TDlink,
