@@ -267,8 +267,30 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
 
             for j in range(1, len(choiceset)):
 
-                if not choiceset[j]:
+                path = choiceset[j, f]
+
+                if (
+                    path is None
+                    or (isinstance(path, np.ndarray) and path.size == 0)
+                    or path == ""
+                ):
                     continue
+
+                if tt[j][f] is None:
+
+                    tt_val, fuel_val = traveltimecal_fast(
+                        po + 899,
+                        TDlink,
+                        choiceset[j, f],
+                        length,
+                        gas,
+                        itr,
+                        0
+                    )
+
+                    tt[j][f] = {po: tt_val}
+                    pltt[j][f] = {po: tt_val}
+                    fuelcost[j][f] = {po: fuel_val}
 
                 b0 = [
                     len_arr[j, f],
