@@ -7,6 +7,7 @@ import subprocess
 import pickle
 from traveltimecal import traveltimecal, traveltimecal_fast
 from realtimemassignment import realtimeassignment, comrealtimeassignment
+import time
 
 #Need input_agent.csv, output_agent.csv
 #Need Each iteration.csv, iteration_LinkTDMOE.csv
@@ -313,9 +314,12 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         agent_df.to_csv('input_agent.csv', index = False)
 
+        start_time = time.time()
+        print("Starting DTA Lite running!")
         subprocess.run(
             ['DTALite_Files/DTAlite.exe'], check = True
         )  
+        print(f"Finished DTA Lite in {time.time() - start_time}")
 
     savemat(
         f"bef_aft_realtime{itr}.mat",
