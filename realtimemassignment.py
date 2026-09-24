@@ -22,7 +22,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
 
     if itr != 1:
 
-        T = pd.read_csv('output_agent.csv')
+        T = pd.read_csv('DTALite_Files/output_agent.csv')
 
         agent_tt = T.iloc[:, 12].to_numpy()
 
@@ -364,7 +364,7 @@ def comrealtimeassignment(
     agentOD[:, 1] = S.iloc[:, 5]
 
     if itr != 1:
-        T = pd.read_csv("output_agent.csv")
+        T = pd.read_csv("DTALite_Files/output_agent.csv")
 
         agent_tt = T.iloc[:, 12].to_numpy()
         agentpath = T.iloc[:, 29].astype(str).tolist()
