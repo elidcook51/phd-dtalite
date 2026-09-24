@@ -37,7 +37,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
         TDlink = td_df.iloc[:, [0, 1, 4, 5]].to_numpy()
     else:
         td_df = pd.read_csv(
-            'output_linkTDMOE.csv',
+            'DTALite_Files/output_linkTDMOE.csv',
             nrows=num_tdlink_rows
         )
 
@@ -314,7 +314,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
 
     if itr == np.floor(60 / phlength):
 
-        fname = f"pathinfo_realass{bigloop}.mat"
+        fname = f"DTALite_Files/pathinfo_realass{bigloop}.mat"
 
         savemat(
             fname,
