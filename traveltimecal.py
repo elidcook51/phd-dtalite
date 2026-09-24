@@ -331,3 +331,161 @@ def traveltimecal_fast(timestamp, TDlink, path, length_data, gas, itr, empty):
             )
 
     return total_time, fuelcost
+
+def traveltimecal_fastv2(timestamp, TDlink, path, length_data, gas, itr, empty):
+
+    if not hasattr(traveltimecal_fastv2, 'tdlink_map'):
+        traveltimecal_fastv2.tdlink_map = {}
+
+    if not hasattr(traveltimecal_fastv2, 'length_map'):
+        traveltimecal_fastv2.length_map = {}
+
+    if not hasattr(traveltimecal_fastv2, 'path_cache'):
+        traveltimecal_fastv2.path_cache = {}
+
+    if not hasattr(traveltimecal_fastv2, 'path_result_cache'):
+        traveltimecal_fastv2.path_result_cache = {}
+
+    if itr == 1 or len(traveltimecal_fastv2.tdlink_map) == 0:
+
+        print('Building TDLink cache...')
+
+        traveltimecal_fastv2.tdlink_map = {
+            (
+                int(row[2]),
+                int(row[0]),
+                int(row[1])
+            ): float(row[3])
+            for row in TDlink
+        } 
+
+        print(f"TDLink entries = ")
+        print(f"{len(traveltimecal_fastv2.tdlink_map):,}")
+
+        print('Building length cache ...')
+
+        traveltimecal_fastv2.length_map = {
+            (
+                int(row[0]),
+                int(row[1])
+            ): (
+                float(row[2]),
+                float(row[3])
+            )
+            for row in length_data
+        }
+
+        print('Length entries = ')
+        print(f"{len(traveltimecal_fastv2.length_map):,}")
+
+        traveltimecal_fastv2.path_result_cache.clear()
+
+    if path not in traveltimecal_fastv2.path_cache:
+
+        nodes = tuple(
+            int(x)
+            for x in path.split(';')
+            if x.strip()
+        )
+
+        links = list(
+            zip(nodes[:-1], nodes[1:])
+        )
+
+        traveltimecal_fastv2.path_cache[path] = (nodes, links)
+
+    nodes, links = (
+        traveltimecal_fastv2.path_cache[path]
+    )
+
+    cache_key = (int(timestamp), path, empty)
+
+    if cache_key in traveltimecal_fastv2.path_result_cache:
+        return traveltimecal_fastv2.path_result_cache[cache_key]
+
+    total_time = 0.0
+    fuelcost = 0.0
+
+    if empty == 1:
+        for from_node, to_node in links:
+
+            link_info = (
+                traveltimecal_fastv2.length_map.get((from_node, to_node))
+            )
+
+            if link_info is None:
+                continue
+
+            length, speed = link_info
+
+            travel_time = (length / speed * 60)
+
+            total_time += travel_time
+
+            fuelcost += (
+                length / 32 * gas
+            )
+
+        result = (
+            total_time, fuelcost
+        )
+
+        traveltimecal_fastv2.path_result_cache[cache_key] = result
+
+        return result
+
+    elapsed_time = 0.0
+
+    for from_node, to_node in links:
+        link_info = (
+            traveltimecal_fastv2.length_map.get((from_node, to_node))
+        )
+
+        td_key = (
+            int(np.floor(timestamp + elapsed_time)),
+            from_node,
+            to_node
+        )
+
+        travel_time = (
+            traveltimecal_fastv2.tdlink_map.get(td_key)
+        )
+
+        if travel_time is None:
+            if link_info is not None:
+                length, speed = link_info
+
+                travel_time = (
+                    length / speed * 60
+                )
+
+            else:
+
+                travel_time = 1
+
+        total_time += travel_time
+        elapsed_time += travel_time
+
+        if link_info is not None:
+            link_length = link_info[0]
+
+            actual_speed = (
+                link_length / travel_time * 60
+            )
+
+            if actual_speed > 40:
+                mpg = 32
+            elif actual_speed < 25:
+                mpg = 22
+            else:
+                mpg = 27
+
+            fuelcost += (
+                link_length / mpg * gas
+            )
+
+    result = (total_time, fuelcost)
+
+    traveltimecal_fastv2.path_result_cache[cache_key] = result
+
+    return result

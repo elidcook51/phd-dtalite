@@ -5,7 +5,7 @@ from scipy.sparse import csr_matrix
 from pathlib import Path
 import subprocess
 import pickle
-from traveltimecal import traveltimecal, traveltimecal_fast
+from traveltimecal import traveltimecal, traveltimecal_fast, traveltimecal_fastv2
 from realtimemassignment import realtimeassignment, comrealtimeassignment
 import time
 
@@ -152,7 +152,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             for k in range(60):
                 departure_time = k + 899
 
-                travel_time, fuel = traveltimecal_fast(
+                travel_time, fuel = traveltimecal_fastv2(
                     departure_time,
                     TDlink,
                     path,

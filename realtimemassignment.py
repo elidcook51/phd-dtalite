@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 from scipy.io import savemat
-from traveltimecal import traveltimecal, traveltimecal_fast
+from traveltimecal import traveltimecal, traveltimecal_fast, traveltimecal_fastv2
 
 def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, nchoice, rposition, bigloop, dsize, num_tdlink_rows):
     onlylike0 = []
@@ -138,7 +138,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
 
             if m == 1:
 
-                tt_val, fuel_val = traveltimecal_fast(
+                tt_val, fuel_val = traveltimecal_fastv2(
                     k + 899,
                     TDlink,
                     choiceset[i][h],
@@ -171,7 +171,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
 
                 if len(ttloc) == 0:
 
-                    tt_val, fuel_val = traveltimecal_fast(
+                    tt_val, fuel_val = traveltimecal_fastv2(
                         k + 899,
                         TDlink,
                         choiceset[i][h],
@@ -205,7 +205,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
                     tt[i][h][k] = np.mean(a)
                     pltt[i][h][k] = np.max(a)
 
-                    _, fuel_val = traveltimecal_fast(
+                    _, fuel_val = traveltimecal_fastv2(
                         k + 899,
                         TDlink,
                         choiceset[i][h],
@@ -278,7 +278,7 @@ def realtimeassignment(itr, choiceset, routelocation, phlength, realtime_user, n
 
                 if tt[j][f] is None:
 
-                    tt_val, fuel_val = traveltimecal_fast(
+                    tt_val, fuel_val = traveltimecal_fastv2(
                         po + 899,
                         TDlink,
                         choiceset[j, f],
