@@ -205,8 +205,8 @@ def msa(bigloop, p, p_fix, p_realtime):
         )
 
         shutil.copyfile(
-            'output_LinkTDMOE.csv',
-            'iteration_LinkTDMOE.csv'
+            'DTALite_Files/output_LinkTDMOE.csv',
+            'DTALite_Files/iteration_LinkTDMOE.csv'
         )
 
         if itr > 1:
@@ -214,38 +214,38 @@ def msa(bigloop, p, p_fix, p_realtime):
 
         prev_choice = np.array(choice)
 
-        dd = pd.read_csv('output_LinkTDMOE.csv')
+        dd = pd.read_csv('DTALite_Files/output_LinkTDMOE.csv')
 
         linkV.append(dd.iloc[:, 7].to_numpy())
 
     shutil.copyfile(
-        'output_agent.csv',
-        f"{bigloop}UOinfor_agent.csv"
+        'DTALite_Files/output_agent.csv',
+        f"DTALite_Files/{bigloop}UOinfor_agent.csv"
     )
 
     shutil.copyfile(
-        'output_LinkMOE.csv',
-        f"{bigloop}UOinfor_LinkMOE.csv"
+        'DTALite_Files/output_LinkMOE.csv',
+        f"DTALite_Files/{bigloop}UOinfor_LinkMOE.csv"
     )
 
     shutil.copyfile(
-        'output_LinkTDMOE.csv',
-        f"{bigloop}UOinfor_LinkTDMOE.csv"
+        'DTALite_Files/output_LinkTDMOE.csv',
+        f"DTALite_Files/{bigloop}UOinfor_LinkTDMOE.csv"
     )
 
     shutil.copyfile(
-        'output_agent.csv',
-        'UOinfor_agent.csv'
+        'DTALite_Files/output_agent.csv',
+        'DTALite_Files/UOinfor_agent.csv'
     )
 
     shutil.copyfile(
-        'output_LinkMOE.csv',
-        'UOinfor_LinkMOE.csv'
+        'DTALite_Files/output_LinkMOE.csv',
+        'DTALite_Files/UOinfor_LinkMOE.csv'
     )
 
     shutil.copyfile(
-        'output_LinkTDMOE.csv',
-        'UOinfor_LinkTDMOE.csv'
+        'DTALite_Files/output_LinkTDMOE.csv',
+        'DTALite_Files/UOinfor_LinkTDMOE.csv'
     )
 
     (
@@ -285,18 +285,18 @@ def msa(bigloop, p, p_fix, p_realtime):
     )
 
     shutil.copyfile(
-        'output_agent.csv',
-        f"{bigloop}predict_agent.csv"
+        'DTALite_Files/output_agent.csv',
+        f"DTALite_Files/{bigloop}predict_agent.csv"
     )
 
     shutil.copyfile(
-        'output_LinkMOE.csv',
-        f"{bigloop}predict_LinkMOE.csv"
+        'DTALite_Files/output_LinkMOE.csv',
+        f"DTALite_Files/{bigloop}predict_LinkMOE.csv"
     )
 
     shutil.copyfile(
-        'output_LinkTDMOE.csv',
-        f"{bigloop}predict_LinkTDMOE.csv"
+        'DTALite_Files/output_LinkTDMOE.csv',
+        f"DTALite_Files/{bigloop}predict_LinkTDMOE.csv"
     )
 
     (
@@ -337,18 +337,18 @@ def msa(bigloop, p, p_fix, p_realtime):
     )
 
     shutil.copyfile(
-        'output_agent.csv',
-        f"{bigloop}actual_agent.csv"
+        'DTALite_Files/output_agent.csv',
+        f"DTALite_Files/{bigloop}actual_agent.csv"
     )
 
     shutil.copyfile(
-        'output_LinkMOE.csv',
-        f"{bigloop}actual_LinkMOE.csv"
+        'DTALite_Files/output_LinkMOE.csv',
+        f"DTALite_Files/{bigloop}actual_LinkMOE.csv"
     )
 
     shutil.copyfile(
-        'output_LinkTDMOE.csv',
-        f"{bigloop}actual_LinkTDMOE.csv"
+        'DTALite_Files/output_LinkTDMOE.csv',
+        f"DTALite_Files/{bigloop}actual_LinkTDMOE.csv"
     )
 
     (
@@ -376,7 +376,7 @@ def msa(bigloop, p, p_fix, p_realtime):
     )
 
     savemat(
-        f"myfile{bigloop}.mat",
+        f"DTALite_Files/myfile{bigloop}.mat",
         {
             'cc': cc,
             'rprime': rprime,
