@@ -1232,15 +1232,36 @@ def realtimeassignment_fast(
 
     p_agent = agent[period_mask]
 
-    rtchoice = np.zeros(
+    rtchoice = np.full(
         (p_agent.shape[0], 1),
+        -1,
         dtype=int,
     )
 
-    updaterposition = np.zeros(
+    updaterposition = np.full(
         (p_agent.shape[0], 1),
+        -1,
         dtype=int,
     )
+
+    nchoice_array = np.asarray(nchoice).reshape(-1)
+    rposition_array = np.asarray(rposition).reshape(-1)
+
+    # Give every agent its existing assignment first.
+    # Realtime agents will be updated only when a valid better route exists.
+    for period_row, agent_record in enumerate(p_agent):
+        agent_id = int(agent_record[0])
+
+        if (
+            0 <= agent_id < nchoice_array.size
+            and 0 <= agent_id < rposition_array.size
+        ):
+            rtchoice[period_row, 0] = int(
+                nchoice_array[agent_id]
+            )
+            updaterposition[period_row, 0] = int(
+                rposition_array[agent_id]
+            )
 
     # ---------------------------------------------------------
     # Build constant-time lookup structures
