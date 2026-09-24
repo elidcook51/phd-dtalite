@@ -230,9 +230,9 @@ def msa(bigloop, p, p_fix, p_realtime):
         (
             choice,
             rposition,
-            tt,
-            ttt,
-            inform
+            nchoice,
+            rposition,
+            ttt
         ) = assignment(
             itr,
             choiceset,
