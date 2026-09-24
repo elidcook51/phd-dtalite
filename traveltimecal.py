@@ -346,7 +346,7 @@ def traveltimecal_fastv2(timestamp, TDlink, path, length_data, gas, itr, empty):
     if not hasattr(traveltimecal_fastv2, 'path_result_cache'):
         traveltimecal_fastv2.path_result_cache = {}
 
-    if itr == 1 or len(traveltimecal_fastv2.tdlink_map) == 0:
+    if len(traveltimecal_fastv2.tdlink_map) == 0:
 
         print('Building TDLink cache...')
 
