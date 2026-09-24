@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import pickle
 from traveltimecal import traveltimecal, traveltimecal_fast, traveltimecal_fastv2
-from realtimemassignment import realtimeassignment, comrealtimeassignment
+from realtimeassignment import realtimeassignment, comrealtimeassignment, realtimeassignment_fast
 import time
 
 #Need input_agent.csv, output_agent.csv
@@ -284,7 +284,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             tt,
             inform,
             check
-        ) = realtimeassignment(
+        ) = realtimeassignment_fast(
             subitr,
             choiceset,
             routelocation,
