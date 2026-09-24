@@ -161,8 +161,8 @@ def msa(bigloop, p, p_fix, p_realtime):
 
             parts = route_string.split(';')
 
-            o = float([parts[0]])
-            d = float([parts[-1]])
+            o = float(parts[0])
+            d = float(parts[-1])
 
             for route_num in np.unique(choice):
 
