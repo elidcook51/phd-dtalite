@@ -350,8 +350,37 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
         (rposition == 0)
     )[0]
 
-    print(f"Agents never assigned: {len(bad)}")
+    print("Agents never assigned:", len(bad))
     print(bad[:20])
+
+    for i in bad[:10]:
+        print(
+            f"agent={i}, "
+            f"OD={agentOD[i]}, "
+            f"is_member={i in member}, "
+            f"is_fix={i in fix_user}, "
+            f"is_realtime={i in realtime_user}"
+        )
+
+        matches = np.where(
+            (routelocation[:,0] == agentOD[i,0]) &
+            (routelocation[:,1] == agentOD[i,1])
+        )[0]
+
+        print("matches:", len(matches))
+
+        if len(matches):
+            f = int(routelocation[matches[0],3])
+
+            valid_routes = [
+                r
+                for r in range(choiceset.shape[0])
+                if (r, f) in tt
+            ]
+
+            print("od column =", f)
+            print("valid routes =", len(valid_routes))
+            print("first routes =", valid_routes[:10])
 
     return (
         np.asarray(final_choice, dtype=int).reshape(-1),
