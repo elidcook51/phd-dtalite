@@ -520,7 +520,12 @@ def msa(bigloop, p, p_fix, p_realtime):
     )
 
     for j in range(dsize):
-
+        if j == 0:
+            print("AGENT 0")
+            print("OD:", inputagent[j][4], inputagent[j][5])
+            print("route_index:", route_index)
+            print("od_column:", od_column)
+            print("selected_path:", selected_path)
         inputagent[j][11] = choiceset[
             int(pre_rposition[j])
         ]
