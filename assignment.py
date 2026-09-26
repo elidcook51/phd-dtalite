@@ -330,6 +330,14 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
         }
     )
 
+    bad = np.where(
+        (nchoice == 0) &
+        (rposition == 0)
+    )[0]
+
+    print(f"Agents never assigned: {len(bad)}")
+    print(bad[:20])
+
     return (
         np.asarray(final_choice, dtype=int).reshape(-1),
         np.asarray(final_rposition, dtype=int).reshape(-1),
