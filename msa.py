@@ -146,6 +146,18 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     choiceset = mat['finallist'].T
 
+    print("choiceset shape:", choiceset.shape)
+
+    for c in range(min(5, choiceset.shape[1])):
+        print(f"\nColumn {c}")
+
+        for r in range(min(10, choiceset.shape[0])):
+            print(
+                r,
+                repr(choiceset[r, c])
+            )
+
+
     routelocation = []
 
     for row_idx in range(choiceset.shape[0]):
@@ -405,6 +417,17 @@ def msa(bigloop, p, p_fix, p_realtime):
             selected_path, nodes = normalize_route_path(
                 choiceset[route_index, od_column]
             )
+
+            for a in range(min(10, dsize)):
+                route_index = int(nchoice[a])
+                od_column = int(rposition[a])
+
+                print(
+                    f"agent={a}, "
+                    f"route_index={route_index}, "
+                    f"od_column={od_column}, "
+                    f"value={repr(choiceset[route_index, od_column])}"
+                )
 
             if selected_path is None:
                 raise ValueError(
