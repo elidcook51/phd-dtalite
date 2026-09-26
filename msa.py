@@ -175,6 +175,16 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     routelocation = np.array(routelocation)
 
+    od_to_column = {}
+
+    for row in routelocation:
+        o = int(row[0])
+        d = int(row[1])
+        col = int(row[3])
+
+        if (o, d) not in od_to_column:
+            od_to_column[(o, d)] = col
+
     user = pd.read_excel(
         'DTALite_Files/SiouxFalls_net.xlsx',
         sheet_name=4,
