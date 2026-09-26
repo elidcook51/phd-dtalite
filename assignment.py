@@ -83,6 +83,21 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             (routelocation[:,1] == od[1])
         )[0]
 
+        print("agent0 matches")
+
+        for idx in matches[:20]:
+            print(routelocation[idx])
+
+        cols = np.unique(
+        routelocation[matches,3]
+        )
+        if len(cols) != 1:
+            print(
+            "OD maps to multiple columns",
+            agentOD[i],
+            cols
+            )
+
         if len(matches) > 0:
             used_columns.append(
                 int(routelocation[matches[0],3])
@@ -212,13 +227,6 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
                 available.append(r)
 
             available = np.array(available, dtype=int)
-
-            print(
-                f"agent={i}",
-                f"OD={agentOD[i]}",
-                f"column={f}",
-                f"available_routes={len(available)}"
-            )
 
             if len(available) == 0:
                 print(
