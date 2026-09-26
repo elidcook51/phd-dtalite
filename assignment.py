@@ -257,6 +257,21 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             nchoice[i] = best_route
             rposition[i] = f
 
+        if i in realtime_user:
+
+            available = [
+                r for r in range(nrows)
+                if (r, f) in tt
+            ]
+
+            if len(available) == 0:
+                continue
+
+            best_route = available[0]
+
+            nchoice[i] = best_route
+            rposition[i] = f
+
     if itr == 18:
 
         savemat(
