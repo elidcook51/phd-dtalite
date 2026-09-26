@@ -345,6 +345,15 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
         for idx, path in enumerate(ypath):
             inputagent[idx][11] = path
 
+            if idx < 10:
+                o = inputagent[idx][4]
+                d = inputagent[idx][5]
+
+                print(
+                    f"agent = {idx}"
+                    f"OD = ({o}, {d})"
+                    f"path = {path}"
+                )
 
         columns = ['agent_id', 'tour_id', 'from_zone_id', 'to_zone_id', 'from_origin_node_id', 'to_destination_node_id','departure_time_in_min', 'demand_type', 'PCE', 'information_type', 'vehicle_age', 'path_node_sequence', 'vehicle_type', 'pricing_type', 'value_of_time']
 
