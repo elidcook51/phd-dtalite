@@ -94,7 +94,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
         if len(cols) != 1:
             print(
             "OD maps to multiple columns",
-            agentOD[i],
+            od,
             cols
             )
 
