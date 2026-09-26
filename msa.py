@@ -444,7 +444,7 @@ def msa(bigloop, p, p_fix, p_realtime):
             inputagent,
             columns =columns
         ).to_csv(
-            'input_agent.csv', index = False
+            'DTALite_Files/input_agent.csv', index = False
         )
 
         subprocess.run(
@@ -525,7 +525,7 @@ def msa(bigloop, p, p_fix, p_realtime):
             int(pre_rposition[j])
         ]
 
-    pd.DataFrame(inputagent, columns = columns).to_csv('input_agent.csv')
+    pd.DataFrame(inputagent, columns = columns).to_csv('DTALite_Files/input_agent.csv')
 
     subprocess.run(
         [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
@@ -577,7 +577,7 @@ def msa(bigloop, p, p_fix, p_realtime):
             int(com_rposition[j])
         ]
 
-    pd.DataFrame(inputagent, columns=columns).to_csv('input_agent.csv', index = False)
+    pd.DataFrame(inputagent, columns=columns).to_csv('DTALite_Files/input_agent.csv', index = False)
 
     subprocess.run(
         [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True

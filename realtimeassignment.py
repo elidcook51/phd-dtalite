@@ -368,12 +368,12 @@ def comrealtimeassignment(
     # --------------------------------------------------
     if itr == 1:
         td_df = pd.read_csv(
-            "Each iteration.csv",
+            "DTALite_Files/Each iteration.csv",
             usecols=[0, 1, 4, 5]
         )
     else:
         td_df = pd.read_csv(
-            "output_linkTDMOE.csv",
+            "DTALite_Files/output_linkTDMOE.csv",
             usecols=[0, 1, 4, 5]
         )
 
@@ -398,7 +398,7 @@ def comrealtimeassignment(
     # Route attributes
     # --------------------------------------------------
     gas = 3.0
-    links = pd.read_csv('input_link.csv')
+    links = pd.read_csv('DTALite_Files/input_link.csv')
     
     length_data = links[['from_node_id', 'to_node_id', 'length', 'free_speed']].to_numpy()
 

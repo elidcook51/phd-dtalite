@@ -37,7 +37,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
         TDlink_table = pd.read_csv('DTALite_Files/Each iteration.csv')
 
     else:
-        T = pd.read_csv('output_agent.csv')
+        T = pd.read_csv('DTALite_Files/output_agent.csv')
 
         agent = np.column_stack([
             T.iloc[:,0],
@@ -54,7 +54,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             T.iloc[:,8]
         ])
 
-        TDlink_table = pd.read_csv('iteration_LinkTDMOE.csv')
+        TDlink_table = pd.read_csv('DTALite_Files/iteration_LinkTDMOE.csv')
 
     TDlink = TDlink_table.iloc[:, [0,1,4,5]].to_numpy()
 
@@ -350,7 +350,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         agent_df = pd.DataFrame(inputagent[:len(final_choice)], columns = columns)
 
-        agent_df.to_csv('input_agent.csv', index = False)
+        agent_df.to_csv('DTALite_Files/input_agent.csv', index = False)
 
         start_time = time.time()
         print("Starting DTA Lite running!")
@@ -402,7 +402,7 @@ def fixedcomassignment(
     # ============================================================
 
     if itr == 1:
-        S = pd.read_csv("input_agent_initial.csv")
+        S = pd.read_csv("DTALite_Files/input_agent_initial.csv")
 
         agent = np.zeros((len(S), 2))
         agent[:, 0] = S.iloc[:, 0]      # agent id
@@ -416,7 +416,7 @@ def fixedcomassignment(
         agentpath = []
 
     else:
-        T = pd.read_csv("output_agent.csv")
+        T = pd.read_csv("DTALite_Files/output_agent.csv")
 
         agent = np.zeros((len(T), 3))
         agent[:, 0] = T.iloc[:, 0]      # agent id
@@ -437,10 +437,10 @@ def fixedcomassignment(
     # ============================================================
 
     if itr == 1:
-        df = pd.read_excel("Each iteration.csv")
+        df = pd.read_excel("DTALite_Files/Each iteration.csv")
 
     else:
-        df = pd.read_csv("output_linkTDMOE.csv")
+        df = pd.read_csv("DTALite_Files/output_linkTDMOE.csv")
 
     TDlink = np.column_stack([
         df.iloc[:num_tdlink_rows, 0],   # from node
@@ -454,7 +454,7 @@ def fixedcomassignment(
     # ============================================================
 
     gas = 3.0
-    links = pd.read_csv('input_link.csv')
+    links = pd.read_csv('DTALite_Files/input_link.csv')
     
     length_data = links[['from_node_id', 'to_node_id', 'length', 'free_speed']].to_numpy()
 
@@ -738,7 +738,7 @@ def comassignment(
     # Read agent files
     # ------------------------------------------------------------------
     if itr == 1:
-        S = pd.read_csv("input_agent.csv")
+        S = pd.read_csv("DTALite_Files/input_agent.csv")
 
         agent = np.zeros((len(S), 2))
         agent[:, 0] = S.iloc[:, 0]      # agent id
@@ -749,7 +749,7 @@ def comassignment(
         )
 
     elif itr == 100:
-        T = pd.read_csv("UOinfor_agent.csv")
+        T = pd.read_csv("DTALite_Files/UOinfor_agent.csv")
 
         agent = np.zeros((len(T), 3))
         agent[:, 0] = T.iloc[:, 0]
@@ -765,7 +765,7 @@ def comassignment(
         )
 
     else:
-        T = pd.read_csv("output_agent.csv")
+        T = pd.read_csv("DTALite_Files/output_agent.csv")
 
         agent = np.zeros((len(T), 3))
         agent[:, 0] = T.iloc[:, 0]
@@ -784,11 +784,11 @@ def comassignment(
     # Read TD Link Data
     # ------------------------------------------------------------------
     if itr == 1:
-        tdfile = "Each iteration.csv"
+        tdfile = "DTALite_Files/Each iteration.csv"
     elif itr == 100:
-        tdfile = "UOinfor_LinkTDMOE.csv"
+        tdfile = "DTALite_Files/UOinfor_LinkTDMOE.csv"
     else:
-        tdfile = "output_LinkTDMOE.csv"
+        tdfile = "DTALite_Files/output_LinkTDMOE.csv"
 
     TD = pd.read_csv(tdfile)
 
@@ -805,7 +805,7 @@ def comassignment(
     # Route attributes
     # ------------------------------------------------------------------
     gas = 3.0
-    links = pd.read_csv('input_link.csv')
+    links = pd.read_csv('DTALite_Files/input_link.csv')
     
     length_data = links[['from_node_id', 'to_node_id', 'length', 'free_speed']].to_numpy()
 
@@ -1146,8 +1146,8 @@ def comassignment(
         for j in range(x + len(p_agent)):
             inputagent[j][11] = ypath[j]
 
-        if os.path.exists("input_agent.csv"):
-            os.remove("input_agent.csv")
+        if os.path.exists("DTALite_Files/input_agent.csv"):
+            os.remove("DTALite_Files/input_agent.csv")
 
         final_inputagent = inputagent[: (x + len(p_agent))]
 
@@ -1170,7 +1170,7 @@ def comassignment(
                 "pricing_type",
                 "value_of_time",
             ],
-        ).to_csv("input_agent.csv", index=False)
+        ).to_csv("DTALite_Files/input_agent.csv", index=False)
 
         subprocess.run(
             [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
