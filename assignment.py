@@ -315,35 +315,6 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
     final_choice = []
     final_rposition = []
 
-    for i in range(min(100, dsize)):
-    
-            row = int(nchoice[i])
-            col = int(rposition[i])
-    
-            path = choiceset[row, col]
-    
-            if isinstance(path, str):
-    
-                nodes = [
-                    int(x)
-                    for x in path.split(";")
-                    if x.strip()
-                ]
-    
-                if (
-                    nodes[0] != agentOD[i,0]
-                    or
-                    nodes[-1] != agentOD[i,1]
-                ):
-                    print(
-                        "BAD ROUTE",
-                        i,
-                        agentOD[i],
-                        (nodes[0], nodes[-1]),
-                        row,
-                        col
-                    )
-
     for subitr in range(1, phase + 1):
 
         (
