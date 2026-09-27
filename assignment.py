@@ -352,6 +352,19 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         for idx, row in enumerate(inputagent):
 
+            print(
+                "agentOD =",
+                tuple(agentOD[idx])
+            )
+
+            print(
+                "inputagentOD =",
+                (
+                    inputagent[idx][4],
+                    inputagent[idx][5]
+                )
+            )
+
             path = row[11]
 
             if not isinstance(path, str):
