@@ -350,6 +350,55 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         agent_df = pd.DataFrame(inputagent[:len(final_choice)], columns = columns)
 
+        for idx, row in enumerate(inputagent):
+
+            path = row[11]
+
+            if not isinstance(path, str):
+                print(
+                    "BAD PATH TYPE",
+                    idx,
+                    row[4],
+                    row[5],
+                    path
+                )
+                continue
+
+            nodes = [
+                int(x)
+                for x in path.split(";")
+                if x.strip()
+            ]
+
+            if len(nodes) < 2:
+                print(
+                    "BAD PATH LENGTH",
+                    idx,
+                    row[4],
+                    row[5],
+                    path
+                )
+                continue
+
+            origin = int(row[4])
+            destination = int(row[5])
+
+            if (
+                nodes[0] != origin
+                or
+                nodes[-1] != destination
+            ):
+                print(
+                    "BAD OD MATCH",
+                    idx,
+                    "Expected:",
+                    (origin, destination),
+                    "Path:",
+                    path,
+                    "Actual:",
+                    (nodes[0], nodes[-1])
+                )
+
         agent_df.to_csv('DTALite_Files/input_agent.csv', index = False)
 
         start_time = time.time()
