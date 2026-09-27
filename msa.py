@@ -231,15 +231,6 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     a = np.floor(a0)
 
-    links = pd.read_csv("DTALite_Files/input_link.csv")
-
-    exists = (
-        (links["from_node_id"] == 16) &
-        (links["to_node_id"] == 10)
-    ).any()
-
-    print("16->10 exists:", exists)
-
     intervalID = np.zeros(len(choiceset))
 
     inform = []
@@ -528,17 +519,6 @@ def msa(bigloop, p, p_fix, p_realtime):
         num_tdlink_rows
     )
 
-    for j in range(dsize):
-        if j == 0:
-            print("AGENT 0")
-            print("OD:", inputagent[j][4], inputagent[j][5])
-            print("route_index:", route_index)
-            print("od_column:", od_column)
-            print("selected_path:", selected_path)
-        inputagent[j][11] = choiceset[
-            int(pre_rposition[j])
-        ]
-
     pd.DataFrame(inputagent, columns = columns).to_csv('DTALite_Files/input_agent.csv')
 
     subprocess.run(
@@ -559,6 +539,12 @@ def msa(bigloop, p, p_fix, p_realtime):
         'DTALite_Files/output_LinkTDMOE.csv',
         f"DTALite_Files/{bigloop}predict_LinkTDMOE.csv"
     )
+
+    print('#' * 20)
+    print('\n' * 5)
+    print('Starting comassignment')
+    print('\n' * 5)
+    print('#' * 20)
 
     (
         com_choice,
