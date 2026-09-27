@@ -1233,13 +1233,13 @@ def realtimeassignment_fast(
     p_agent = agent[period_mask]
 
     rtchoice = np.full(
-        (p_agent.shape[0], 1),
+        p_agent.shape[0],
         -1,
         dtype=int,
     )
 
     updaterposition = np.full(
-        (p_agent.shape[0], 1),
+        p_agent.shape[0],
         -1,
         dtype=int,
     )
@@ -1256,10 +1256,10 @@ def realtimeassignment_fast(
             0 <= agent_id < nchoice_array.size
             and 0 <= agent_id < rposition_array.size
         ):
-            rtchoice[period_row, 0] = int(
+            rtchoice[period_row] = int(
                 nchoice_array[agent_id]
             )
-            updaterposition[period_row, 0] = int(
+            updaterposition[period_row] = int(
                 rposition_array[agent_id]
             )
 
@@ -1288,10 +1288,10 @@ def realtimeassignment_fast(
                 0 <= agent_id < nchoice_array.size
                 and 0 <= agent_id < rposition_array.size
             ):
-                rtchoice[period_row, 0] = int(
+                rtchoice[period_row] = int(
                     nchoice_array[agent_id]
                 )
-                updaterposition[period_row, 0] = int(
+                updaterposition[period_row] = int(
                     rposition_array[agent_id]
                 )
             continue
@@ -1349,8 +1349,8 @@ def realtimeassignment_fast(
         if best_row < 0:
             continue
 
-        rtchoice[period_row, 0] = best_row
-        updaterposition[period_row, 0] = best_col
+        rtchoice[period_row] = best_row
+        updaterposition[period_row] = best_col
 
     # ---------------------------------------------------------
     # Save final period route information

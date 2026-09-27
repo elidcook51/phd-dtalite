@@ -339,6 +339,17 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
         final_choice.extend(ite_choice)
         final_rposition.extend(updaterposition)
 
+        for k, (choice, pos) in enumerate(
+            zip(final_choice[:10], final_rposition[:10])
+        ):
+            print(
+                k,
+                type(choice),
+                choice,
+                type(pos),
+                pos
+            )
+
         ypath = [
             choiceset[int(choice),int(pos)] for choice, pos in zip(final_choice, final_rposition)
         ]
