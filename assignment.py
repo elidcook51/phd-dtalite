@@ -214,10 +214,16 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         if i in member:
 
-            available = [
-                r for r in range(nrows)
-                if (r, f) in tt
-            ]
+            available = []
+
+            for idx in matches:
+                route_row = int(routelocation[idx, 4])
+                route_col = int(routelocation[idx, 3])
+
+                if (route_row, route_col) in tt:
+                    available.append(
+                        (route_row, route_col)
+                    )
 
             if len(available) == 0:
                 continue
