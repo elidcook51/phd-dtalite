@@ -231,6 +231,15 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     a = np.floor(a0)
 
+    links = pd.read_csv("DTALite_Files/input_link.csv")
+
+    exists = (
+        (links["from_node_id"] == 16) &
+        (links["to_node_id"] == 10)
+    ).any()
+
+    print("16->10 exists:", exists)
+
     intervalID = np.zeros(len(choiceset))
 
     inform = []
