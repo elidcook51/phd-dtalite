@@ -438,7 +438,7 @@ def msa(bigloop, p, p_fix, p_realtime):
 
             inputagent[j][11] = selected_path
 
-        columns = ['agent_id', 'tour_id', 'from_zone_id', 'to_zone_id', 'from_origin_node_id', 'to_destination_node_id', 'departure_time_in_min','demand_type', 'PCE', 'infomration_type', 'vehicle_age', 'path_node_sequencing', 'vehicle_type', 'pricing_type', 'value_of_time']
+        columns = ['agent_id', 'tour_id', 'from_zone_id', 'to_zone_id', 'from_origin_node_id', 'to_destination_node_id', 'departure_time_in_min','demand_type', 'PCE', 'information_type', 'vehicle_age', 'path_node_sequencing', 'vehicle_type', 'pricing_type', 'value_of_time']
 
         pd.DataFrame(
             inputagent,
