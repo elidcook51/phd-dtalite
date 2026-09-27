@@ -350,6 +350,23 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         agent_df = pd.DataFrame(inputagent[:len(final_choice)], columns = columns)
 
+        for idx in range(10):
+
+            print("\nAGENT", idx)
+
+            print(
+                "OD =",
+                (
+                    inputagent[idx][4],
+                    inputagent[idx][5]
+                )
+            )
+
+            print(
+                "PATH =",
+                inputagent[idx][11]
+            )
+
         agent_df.to_csv('DTALite_Files/input_agent.csv', index = False)
 
         start_time = time.time()
