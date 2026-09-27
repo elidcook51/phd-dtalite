@@ -83,21 +83,6 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             (routelocation[:,1] == od[1])
         )[0]
 
-        print("agent0 matches")
-
-        for idx in matches[:20]:
-            print(routelocation[idx])
-
-        cols = np.unique(
-        routelocation[matches,3]
-        )
-        if len(cols) != 1:
-            print(
-            "OD maps to multiple columns",
-            od,
-            cols
-            )
-
         if len(matches) > 0:
             used_columns.append(
                 int(routelocation[matches[0],3])
@@ -201,46 +186,29 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
         po -= 1
 
 
-        if (i) in fix_user:
+        if i in fix_user:
 
-            available = []
+            valid_routes = []
 
-            for r in range(nrows):
+            for idx in matches:
 
-                path = choiceset[r, f]
+                route_row = int(routelocation[idx, 4])
+                route_col = int(routelocation[idx, 3])
 
-                if isinstance(path, np.ndarray):
-                    if path.size == 0:
-                        continue
+                path = choiceset[route_row, route_col]
 
                 if not isinstance(path, str):
                     continue
 
-                if len(path.strip()) == 0:
-                    continue
+                valid_routes.append((route_row, route_col))
 
-                nodes = [int(x) for x in path.split(';') if x.strip()]
-
-                if len(nodes) < 2:
-                    continue
-
-                available.append(r)
-
-            available = np.array(available, dtype=int)
-
-            if len(available) == 0:
-                print(
-                    f"No valid routes found for "
-                    f"OD={agentOD[i]} column={f}"
-                )
+            if len(valid_routes) == 0:
                 continue
 
-            shortest = available[
-                np.argmin(route_length[available,f])
-            ]
+            best_row, best_col = min(valid_routes, key = lambda rc: route_length[rc[0], rc[1]])
 
-            nchoice[i]= shortest
-            rposition[i] = f
+            nchoice[i] = best_row
+            rposition[i] = best_col
 
             continue
 
