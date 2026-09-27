@@ -1272,43 +1272,6 @@ def realtimeassignment_fast(
         for agent_id in np.asarray(realtime_user).ravel()
     }
 
-    route_location_lookup = {}
-
-    for row in routelocation:
-        if not np.all(np.isfinite(
-            np.asarray([row[0], row[1], row[3]], dtype=float)
-        )):
-            continue
-
-        od_key = (
-            int(row[0]),
-            int(row[1]),
-        )
-
-        route_location_lookup[od_key] = int(row[3])
-
-    # ---------------------------------------------------------
-    # Find the minimum-time route once for each OD column
-    # ---------------------------------------------------------
-
-    best_route_by_od = np.full(n_ods, -1, dtype=int)
-
-    for od_index in range(n_ods):
-        valid_route_indices = np.flatnonzero(
-            np.isfinite(current_tt[:, od_index])
-        )
-
-        if valid_route_indices.size == 0:
-            continue
-
-        relative_best_index = np.argmin(
-            current_tt[valid_route_indices, od_index]
-        )
-
-        best_route_by_od[od_index] = int(
-            valid_route_indices[relative_best_index]
-        )
-
     # ---------------------------------------------------------
     # Assign routes to current-period agents
     # ---------------------------------------------------------
@@ -1341,23 +1304,53 @@ def realtimeassignment_fast(
         origin = int(agent_od_values[agent_row, 0])
         destination = int(agent_od_values[agent_row, 1])
 
-        od_index = route_location_lookup.get(
-            (origin, destination)
-        )
+        matches = np.where(
+            (routelocation[:,0] == origin) & 
+            (routelocation[:,1] == destination) 
+        )[0]
 
-        if od_index is None:
+        if len(matches == 0):
             continue
 
-        if not 0 <= od_index < n_ods:
+        best_row = -1
+        best_col = -1
+        best_tt = np.inf
+
+        for idx in matches:
+            row = int(routelocation[idx, 4])
+            col = int(routelocation[idx, 3])
+
+            path = choiceset[row, col]
+
+            if not isinstance(path, str):
+                continue
+
+            nodes = [int(x) for x in path.split(';') if x.strip()]
+
+            if len(nodes) < 2:
+                continue
+
+            if (
+                nodes[0] != origin or
+                nodes[-1] != destination
+            ):
+                continue
+
+            if not np.isfinite(current_tt[row, col]):
+                continue
+
+            cur_tt = current_tt[row, col]
+
+            if cur_tt < best_tt:
+                best_tt = cur_tt
+                best_row = row
+                best_col = col
+
+        if best_row < 0:
             continue
 
-        best_route = best_route_by_od[od_index]
-
-        if best_route < 0:
-            continue
-
-        rtchoice[period_row, 0] = best_route
-        updaterposition[period_row, 0] = od_index
+        rtchoice[period_row, 0] = best_row
+        updaterposition[period_row, 0] = best_col
 
     # ---------------------------------------------------------
     # Save final period route information
