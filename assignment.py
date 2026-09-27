@@ -228,27 +228,27 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             if len(available) == 0:
                 continue
 
-            best_route = available[0]
+            best_row, best_col = available[0]
 
             current = np.array([
-                route_length[best_route,f],
-                tt[(best_route,f)][po],
-                pltt[(best_route,f)][po],
-                fuelcost[(best_route,f)][po],
-                nc[best_route,f]
+                route_length[best_row, best_col],
+                tt[(best_row, best_col)][po],
+                pltt[(best_row, best_col)][po],
+                fuelcost[(best_row, best_col)][po],
+                nc[best_row, best_col]
             ])
 
-            for j in available[1:]:
+            for route_row, route_col in available[1:]:
 
-                if choiceset[j,f] is None:
+                if choiceset[route_row, route_col] is None:
                     continue
 
                 candidate = np.array([
-                    route_length[j,f],
-                    tt[(j,f)][po],
-                    pltt[(j,f)][po],
-                    fuelcost[(j,f)][po],
-                    nc[j,f]
+                    route_length[best_row, best_col],
+                    tt[(best_row, best_col)][po],
+                    pltt[(best_row, best_col)][po],
+                    fuelcost[(best_row, best_col)][po],
+                    nc[best_row, best_col]
                 ])
 
                 diff = current - candidate
@@ -269,25 +269,32 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
                 if choice == 0:
                     current = candidate
-                    best_route = j
+                    best_row = route_row
+                    best_col = route_col
 
-            nchoice[i] = best_route
-            rposition[i] = f
+            nchoice[i] = best_row
+            rposition[i] = best_col
 
         if i in realtime_user:
 
-            available = [
-                r for r in range(nrows)
-                if (r, f) in tt
-            ]
+            available = []
+
+            for idx in matches:
+                route_row = int(routelocation[idx, 4])
+                route_col = int(routelocation[idx, 3])
+
+                if (route_row, route_col) in tt:
+                    available.append(
+                        (route_row, route_col)
+                    )
 
             if len(available) == 0:
                 continue
 
-            best_route = available[0]
+            best_row, best_col = available[0]
 
-            nchoice[i] = best_route
-            rposition[i] = f
+            nchoice[i] = best_row
+            rposition[i] = best_col
 
     if itr == 18:
 
@@ -360,6 +367,35 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             'final_rposition': np.array(final_rposition)
         }
     )
+
+    for i in range(min(100, dsize)):
+
+        row = int(nchoice[i])
+        col = int(rposition[i])
+
+        path = choiceset[row, col]
+
+        if isinstance(path, str):
+
+            nodes = [
+                int(x)
+                for x in path.split(";")
+                if x.strip()
+            ]
+
+            if (
+                nodes[0] != agentOD[i,0]
+                or
+                nodes[-1] != agentOD[i,1]
+            ):
+                print(
+                    "BAD ROUTE",
+                    i,
+                    agentOD[i],
+                    (nodes[0], nodes[-1]),
+                    row,
+                    col
+                )
 
     return (
         np.asarray(final_choice, dtype=int).reshape(-1),
