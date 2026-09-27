@@ -359,7 +359,37 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         columns = ['agent_id', 'tour_id', 'from_zone_id', 'to_zone_id', 'from_origin_node_id', 'to_destination_node_id','departure_time_in_min', 'demand_type', 'PCE', 'information_type', 'vehicle_age', 'path_node_sequence', 'vehicle_type', 'pricing_type', 'value_of_time']
 
+        agent_id = 0
+
+        path = inputagent[agent_id][11]
+
+        print("PATH =", repr(path))
+
+        nodes = [
+            int(x)
+            for x in path.split(";")
+            if x.strip()
+        ]
+
+        print("NODES =", nodes)
+
+        links = pd.read_csv("DTALite_Files/input_link.csv")
+
+        for n1, n2 in zip(nodes[:-1], nodes[1:]):
+
+            exists = (
+                (links["from_node_id"] == n1) &
+                (links["to_node_id"] == n2)
+            ).any()
+
+            print(
+                f"{n1}->{n2}",
+                exists
+            )
+
         agent_df = pd.DataFrame(inputagent[:len(final_choice)], columns = columns)
+
+        print(agent_df.iloc[0])
 
         agent_df.to_csv('DTALite_Files/input_agent.csv', index = False)
 
