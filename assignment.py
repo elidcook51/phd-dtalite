@@ -467,7 +467,7 @@ def fixedcomassignment(
     gas = 3.0
     links = pd.read_csv('DTALite_Files/input_link.csv')
     
-    length_data = links[['from_node_id', 'to_node_id', 'length', 'free_speed']].to_numpy()
+    length_data = links[['from_node_id', 'to_node_id', 'length']].to_numpy()
 
     max_node = int(np.max(length_data[:,0:2]))
 
@@ -828,7 +828,7 @@ def comassignment(
     gas = 3.0
     links = pd.read_csv('DTALite_Files/input_link.csv')
     
-    length_data = links[['from_node_id', 'to_node_id', 'length', 'free_speed']].to_numpy()
+    length_data = links[['from_node_id', 'to_node_id', 'length']].to_numpy()
 
     n_routes, n_ods = choiceset.shape
 
