@@ -1216,6 +1216,22 @@ def comassignment(
             ],
         ).to_csv("DTALite_Files/input_agent.csv", index=False)
 
+        print("Agent 4 row:")
+        print(inputagent[4])
+
+        print(
+            "chosen route:",
+            final_choice[4],
+            final_rposition[4]
+        )
+
+        print(
+            choiceset[
+                int(final_choice[4]),
+                int(final_rposition[4])
+            ]
+        )
+
         subprocess.run(
             [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
         )
