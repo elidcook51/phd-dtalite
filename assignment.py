@@ -527,9 +527,8 @@ def fixedcomassignment(
 
             path = choiceset[i][h]
 
-            if path is None or path == "":
+            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "":
                 continue
-
             m = 1
             agentn = []
 
@@ -840,7 +839,7 @@ def comassignment(
 
             path = choiceset[i, h]
 
-            if path is None or path == "":
+            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "":
                 continue
 
             nodes = [
@@ -875,7 +874,7 @@ def comassignment(
 
             path = choiceset[i, h]
 
-            if path is None or path == "":
+            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "":
                 continue
 
             m = 1
