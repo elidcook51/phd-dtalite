@@ -146,15 +146,6 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     choiceset = mat['finallist'].T
 
-    for c in range(min(5, choiceset.shape[1])):
-        print(f"\nColumn {c}")
-
-        for r in range(min(10, choiceset.shape[0])):
-            print(
-                r,
-                repr(choiceset[r, c])
-            )
-
     routelocation = []
 
     for row_idx in range(choiceset.shape[0]):
@@ -229,7 +220,7 @@ def msa(bigloop, p, p_fix, p_realtime):
         a0[i, 2] = inputagent[i][5]
 
     a = np.floor(a0)
-    
+
     rposition = []
 
     cc = np.zeros(25)
