@@ -567,7 +567,7 @@ def fixedcomassignment(
 
                 if m == 1:
 
-                    tt_val, fc_val = traveltimecal(
+                    tt_val, fc_val = traveltimecal_fastv2(
                         dep_time,
                         TDlink,
                         path,
@@ -594,7 +594,7 @@ def fixedcomassignment(
 
                     if len(ttloc) == 0:
 
-                        tt_val, fc_val = traveltimecal(
+                        tt_val, fc_val = traveltimecal_fastv2(
                             dep_time,
                             TDlink,
                             path,
@@ -615,7 +615,7 @@ def fixedcomassignment(
                         tt[(i, h)][k] = np.mean(a)
                         pltt[(i, h)][k] = np.max(a)
 
-                        _, fc_val = traveltimecal(
+                        _, fc_val = traveltimecal_fastv2(
                             dep_time,
                             TDlink,
                             path,
@@ -916,7 +916,7 @@ def comassignment(
 
                 if m == 1:
 
-                    travel_time, fuel = traveltimecal(
+                    travel_time, fuel = traveltimecal_fastv2(
                         current_time,
                         TDlink,
                         path,
@@ -941,7 +941,7 @@ def comassignment(
 
                     if len(ttloc) == 0:
 
-                        travel_time, fuel = traveltimecal(
+                        travel_time, fuel = traveltimecal_fastv2(
                             current_time,
                             TDlink,
                             path,
@@ -962,7 +962,7 @@ def comassignment(
                         tt[(i, h)][k] = np.mean(observed_tt)
                         pltt[(i, h)][k] = np.max(observed_tt)
 
-                        _, fuel = traveltimecal(
+                        _, fuel = traveltimecal_fastv2(
                             current_time,
                             TDlink,
                             path,
