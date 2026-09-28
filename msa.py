@@ -155,7 +155,6 @@ def msa(bigloop, p, p_fix, p_realtime):
                 repr(choiceset[r, c])
             )
 
-
     routelocation = []
 
     for row_idx in range(choiceset.shape[0]):
@@ -230,10 +229,7 @@ def msa(bigloop, p, p_fix, p_realtime):
         a0[i, 2] = inputagent[i][5]
 
     a = np.floor(a0)
-
-    intervalID = np.zeros(len(choiceset))
-
-    inform = []
+    
     rposition = []
 
     cc = np.zeros(25)
