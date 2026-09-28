@@ -209,7 +209,7 @@ def msa(bigloop, p, p_fix, p_realtime):
         sheet_name = 5,
         usecols = 'H:L',
         skiprows = 1,
-        nrows = 1
+        nrows = 2
     ).values
 
     a0 = np.zeros((dsize, 3))
