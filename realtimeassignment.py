@@ -568,11 +568,12 @@ def comrealtimeassignment(
 
         agent_id = int(p_agent[i, 0])
 
+        agent_id = int(p_agent[i,0])
+
+        rtchoice[i] = int(nchoice[agent_id])
+        updaterposition[i] = int(rposition[agent_id])
+
         if agent_id not in realtime_user:
-
-            rtchoice[i] = nchoice[agent_id]
-            updaterposition[i] = rposition[agent_id]
-
             continue
 
         ff = np.where(
