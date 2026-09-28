@@ -448,7 +448,7 @@ def fixedcomassignment(
     # ============================================================
 
     if itr == 1:
-        df = pd.read_excel("DTALite_Files/Each iteration.csv")
+        df = pd.read_csv("DTALite_Files/Each iteration.csv")
 
     else:
         df = pd.read_csv("DTALite_Files/output_LinkTDMOE.csv")
