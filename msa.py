@@ -533,6 +533,8 @@ def msa(bigloop, p, p_fix, p_realtime):
     print('\n' * 5)
     print('#' * 20)
 
+    print(meanstd2.shape)
+
     (
         com_choice,
         com_rposition,
