@@ -1130,6 +1130,7 @@ def comassignment(
             inform,
             check,
             pre_choice,
+            pre_position
         ) = comrealtimeassignment(
             subitr,
             choiceset,
@@ -1152,6 +1153,7 @@ def comassignment(
             final_choice = np.asarray(ite_choice)
             final_rposition = np.asarray(updaterposition)
             final_pre_choice = np.asarray(pre_choice)
+            final_pre_position = np.asarray(pre_position)
 
             x = 0
 
@@ -1169,6 +1171,10 @@ def comassignment(
 
             final_pre_choice = np.concatenate(
                 [final_pre_choice, np.asarray(pre_choice)]
+            )
+
+            final_pre_position = np.concatenate(
+                [final_pre_position, np.asarray(pre_position)]
             )
 
         ypath = []
@@ -1221,4 +1227,5 @@ def comassignment(
         ttt,
         b,
         final_pre_choice,
+        final_pre_position
     )

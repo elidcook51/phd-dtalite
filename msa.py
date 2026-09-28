@@ -544,7 +544,8 @@ def msa(bigloop, p, p_fix, p_realtime):
         com_tt,
         com_ttt,
         com_inform,
-        pre_choice
+        pre_choice,
+        pre_position
     ) = comassignment(
         100,
         choiceset,
@@ -595,7 +596,8 @@ def msa(bigloop, p, p_fix, p_realtime):
         com_rpositionOK,
         com_ttOK,
         com_tttOK,
-        pre_choiceOK
+        pre_choiceOK,
+        pre_positionOK
     ) = comassignment(
         2,
         choiceset,
@@ -620,7 +622,8 @@ def msa(bigloop, p, p_fix, p_realtime):
             'cc': cc,
             'rprime': rprime,
             'linkV': np.array(linkV, dypte = object),
-            'choice': pre_choice
+            'choice': pre_choice,
+            'position': pre_position
         }
     )
 

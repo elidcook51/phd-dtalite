@@ -559,6 +559,7 @@ def comrealtimeassignment(
     rtchoice = np.zeros(len(p_agent), dtype=int)
     updaterposition = np.zeros(len(p_agent), dtype=int)
     pre_choice = np.zeros(len(p_agent), dtype=int)
+    pre_position = np.zeros(len(p_agent), dtype = int)
 
     # --------------------------------------------------
     # Route choice
@@ -608,6 +609,7 @@ def comrealtimeassignment(
 
         pre_b1 = b1.copy()
         pre_route = best_row.copy()
+        pre_col = best_col.copy()
 
         for route_row, route_col in available:
             if (
@@ -668,10 +670,12 @@ def comrealtimeassignment(
             if pre_b1[1] >= pre_b0[1]:
                 pre_b1 = pre_b0
                 pre_route = route_row
+                pre_col = route_col
 
         rtchoice[i] = best_row
         updaterposition[i] = best_col
         pre_choice[i] = pre_route
+        pre_position[i] = pre_col
 
         # ff = np.where(
         #     (routelocation[:, 0] ==
@@ -801,6 +805,7 @@ def comrealtimeassignment(
         b,
         p_agent,
         pre_choice,
+        pre_position
     )
 
 
