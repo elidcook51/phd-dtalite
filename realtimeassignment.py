@@ -488,7 +488,7 @@ def comrealtimeassignment(
 
                 if m == 1:
 
-                    tt_val, fc_val = traveltimecal(
+                    tt_val, fc_val = traveltimecal_fastv2(
                         k + 899,
                         TDlink,
                         path,
@@ -514,7 +514,7 @@ def comrealtimeassignment(
 
                     if len(ttloc) == 0:
 
-                        tt_val, fc_val = traveltimecal(
+                        tt_val, fc_val = traveltimecal_fastv2(
                             k + 899,
                             TDlink,
                             path,
@@ -535,7 +535,7 @@ def comrealtimeassignment(
                         tt[(i, h, k)] = np.mean(a)
                         pltt[(i, h, k)] = np.max(a)
 
-                        _, fc_val = traveltimecal(
+                        _, fc_val = traveltimecal_fastv2(
                             k + 899,
                             TDlink,
                             path,
