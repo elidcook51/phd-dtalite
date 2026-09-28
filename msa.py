@@ -5,6 +5,7 @@ from assignment import assignment, comassignment
 import numpy as np
 import pandas as pd
 from scipy.io import loadmat, savemat
+import time
 
 
 def dividerand(driver_ids, p, p_realtime, p_fix):
@@ -129,6 +130,7 @@ def parse_path_endpoints(raw_path, row_index=None):
     return nodes[0], nodes[-1], normalized_path
 
 def msa(bigloop, p, p_fix, p_realtime):
+    start_time = time.time()
 
     temp_agent_data = pd.read_csv('DTALite_Files/input_agent_initial.csv')
 
@@ -537,6 +539,7 @@ def msa(bigloop, p, p_fix, p_realtime):
     print('Starting comassignment')
     print('\n' * 5)
     print('#' * 20)
+    print(f"It's been {time.time() - start_time} seconds")
 
     (
         com_choice,
