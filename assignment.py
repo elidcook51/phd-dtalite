@@ -1007,12 +1007,6 @@ def comassignment(
 
             best_row, best_col = available[0]
 
-            print(type(route_len[best_row, best_col]), route_len[best_row, best_col])
-            print(type(tt[(best_row, best_col)][po, 0]), tt[(best_row, best_col)][po, 0])
-            print(type(pltt[(best_row, best_col)][po, 0]), pltt[(best_row, best_col)][po, 0])
-            print(type(fuelcost[(best_row, best_col)][po, 0]), fuelcost[(best_row, best_col)][po, 0])
-            print(type(nc[best_row, best_col]), nc[best_row, best_col])
-
             b1 = np.array([
                 route_len[best_row, best_col],
                 float(tt[(best_row, best_col)][po]),
