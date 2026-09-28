@@ -703,6 +703,8 @@ def fixedcomassignment(
 
                     else:
 
+                        print(meanstd2.shape)
+
                         bscale = (
                             b - meanstd2[0, :]
                         ) / meanstd2[1, :]
