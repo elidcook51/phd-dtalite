@@ -119,7 +119,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
                 ):
                     link_idx = link_lookup[n1, n2]
 
-                    if link_idx > 0:
+                    if link_idx >= 0:
                         route_length[i, col] += (
                             link_lengths[int(link_idx)-1,2]
                         )
@@ -244,11 +244,11 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
                     continue
 
                 candidate = np.array([
-                    route_length[best_row, best_col],
-                    tt[(best_row, best_col)][po],
-                    pltt[(best_row, best_col)][po],
-                    fuelcost[(best_row, best_col)][po],
-                    nc[best_row, best_col]
+                    route_length[route_row, route_col],
+                    tt[(route_row, route_col)][po],
+                    pltt[(route_row, route_col)][po],
+                    fuelcost[(route_row, route_col)][po],
+                    nc[route_row, route_col]
                 ])
 
                 diff = current - candidate
@@ -451,7 +451,7 @@ def fixedcomassignment(
         df = pd.read_excel("DTALite_Files/Each iteration.csv")
 
     else:
-        df = pd.read_csv("DTALite_Files/output_linkTDMOE.csv")
+        df = pd.read_csv("DTALite_Files/output_LinkTDMOE.csv")
 
     TDlink = np.column_stack([
         df.iloc[:num_tdlink_rows, 0],   # from node
@@ -508,7 +508,7 @@ def fixedcomassignment(
                 if (0 < n1 <= max_node and 0 < n2 <= max_node):
                     link_idx = link_lookup[n1, n2]
 
-                    if link_idx > 0:
+                    if link_idx >= 0:
                         len_mat[i, h] += length_data[int(link_idx)-1,2]
 
             nc[i, h] = len(nodes) - 1
@@ -577,9 +577,9 @@ def fixedcomassignment(
                         0
                     )
 
-                    tt[(i, h)][k, 0] = tt_val
-                    pltt[(i, h)][k, 0] = tt_val
-                    fuelcost[(i, h)][k, 0] = fc_val
+                    tt[(i, h)][k] = tt_val
+                    pltt[(i, h)][k] = tt_val
+                    fuelcost[(i, h)][k] = fc_val
 
                 else:
 
@@ -604,16 +604,16 @@ def fixedcomassignment(
                             0
                         )
 
-                        tt[(i, h)][k, 0] = tt_val
-                        pltt[(i, h)][k, 0] = tt_val
-                        fuelcost[(i, h)][k, 0] = fc_val
+                        tt[(i, h)][k] = tt_val
+                        pltt[(i, h)][k] = tt_val
+                        fuelcost[(i, h)][k] = fc_val
 
                     else:
 
                         a = agentn[ttloc, 2]
 
-                        tt[(i, h)][k, 0] = np.mean(a)
-                        pltt[(i, h)][k, 0] = np.max(a)
+                        tt[(i, h)][k] = np.mean(a)
+                        pltt[(i, h)][k] = np.max(a)
 
                         _, fc_val = traveltimecal(
                             dep_time,
@@ -625,7 +625,7 @@ def fixedcomassignment(
                             0
                         )
 
-                        fuelcost[(i, h)][k, 0] = fc_val
+                        fuelcost[(i, h)][k] = fc_val
 
     # ============================================================
     # Route choice assignment
@@ -635,51 +635,60 @@ def fixedcomassignment(
 
     for i in range(dsize):
 
-        if (i) in fix_user_set:
+        if i in fix_user_set:
 
             ff = np.where(
                 (routelocation[:, 0] == agentOD[i, 0]) &
                 (routelocation[:, 1] == agentOD[i, 1])
             )[0]
 
-            f = int(routelocation[ff[0], 3])
-
             po = int(np.floor(agent[i, 1]) - 899)
+            po = max(1, min(po, 300))
+            po -= 1
+
+            available = []
+
+            for idx in ff:
+                route_row = int(routelocation[idx, 4])
+                route_col = int(routelocation[idx, 3])
+
+                if (route_row, route_col) in tt:
+                    available.append((route_row, route_col))
+
+            if len(available) == 0:
+                continue
+
+            best_row, best_col = available[0]
 
             b1 = np.array([
-                len_mat[0, f],
-                tt[(0, f)][po - 1, 0],
-                pltt[(0, f)][po - 1, 0],
-                fuelcost[(0, f)][po - 1, 0],
-                nc[0, f]
+                len_mat[best_row, best_col],
+                tt[(best_row,best_col)][po],
+                pltt[(best_row, best_col)][po],
+                fuelcost[(best_row, best_col)][po],
+                nc[best_row,best_col]
             ])
 
-            croute = 1
-
-            for j in range(1, num_routes):
-
-                if (
-                    choiceset[j][f] is None
-                    or choiceset[j][f] == ""
+            for route_row, route_col in available[1:]:
+                if(
+                    choiceset[route_row,route_col] is None or
+                    choiceset[route_row, route_col] == ""
                 ):
                     continue
 
                 b0 = np.array([
-                    len_mat[j, f],
-                    tt[(j, f)][po - 1, 0],
-                    pltt[(j, f)][po - 1, 0],
-                    fuelcost[(j, f)][po - 1, 0],
-                    nc[j, f]
+                    len_mat[route_row, route_col],
+                    tt[(route_row, route_col)][po],
+                    pltt[(route_row,route_col)][po],
+                    fuelcost[(route_row,route_col)][po],
+                    nc[route_row,route_col]
                 ])
 
                 b = b1 - b0
 
                 if i in onlylike1:
-
                     choice = 0
 
                 elif i in onlylike0:
-
                     choice = 1
 
                 else:
@@ -711,10 +720,11 @@ def fixedcomassignment(
 
                 if choice == 0:
                     b1 = b0
-                    croute = j + 1
+                    best_row = route_row
+                    best_col = route_col
 
-            nchoice[i, 0] = croute
-            rposition[i, 0] = f
+            nchoice[i] = best_row
+            rposition[i] = best_col
 
     return nchoice, rposition
     
@@ -916,9 +926,9 @@ def comassignment(
                         0,
                     )
 
-                    tt[(i, h)][k, 0] = travel_time
-                    pltt[(i, h)][k, 0] = travel_time
-                    fuelcost[(i, h)][k, 0] = fuel
+                    tt[(i, h)][k] = travel_time
+                    pltt[(i, h)][k] = travel_time
+                    fuelcost[(i, h)][k] = fuel
 
                 else:
 
@@ -941,16 +951,16 @@ def comassignment(
                             0,
                         )
 
-                        tt[(i, h)][k, 0] = travel_time
-                        pltt[(i, h)][k, 0] = travel_time
-                        fuelcost[(i, h)][k, 0] = fuel
+                        tt[(i, h)][k] = travel_time
+                        pltt[(i, h)][k] = travel_time
+                        fuelcost[(i, h)][k] = fuel
 
                     else:
 
                         observed_tt = agentn[ttloc, 2]
 
-                        tt[(i, h)][k, 0] = np.mean(observed_tt)
-                        pltt[(i, h)][k, 0] = np.max(observed_tt)
+                        tt[(i, h)][k] = np.mean(observed_tt)
+                        pltt[(i, h)][k] = np.max(observed_tt)
 
                         _, fuel = traveltimecal(
                             current_time,
@@ -962,7 +972,7 @@ def comassignment(
                             0,
                         )
 
-                        fuelcost[(i, h)][k, 0] = fuel
+                        fuelcost[(i, h)][k] = fuel
 
     # ------------------------------------------------------------------
     # Initial route assignment
@@ -978,33 +988,48 @@ def comassignment(
             (routelocation[:, 1] == agentOD[i, 1])
         )[0]
 
-        f = int(routelocation[ff[0], 3])
-
         po = int(np.floor(agent[i, 1]) - 899)
+        po = max(1, min(po, 300))
+        po -= 1
 
-        if (i - 1) in member:
+        available = []
+
+        for idx in ff:
+            route_row = int(routelocation[idx, 4])
+            route_col = int(routelocation[idx, 3])
+
+            if (route_row, route_col) in tt:
+                available.append((route_row, route_col))
+
+        if len(available) == 0:
+            continue
+
+        if i in member:
+
+            best_row, best_col = available[0]
 
             b1 = np.array([
-                route_len[0, f],
-                tt[(0, f)][po, 0],
-                pltt[(0, f)][po, 0],
-                fuelcost[(0, f)][po, 0],
-                nc[0, f]
+                route_len[best_row, best_col],
+                tt[(best_row, best_col)][po],
+                pltt[(best_row, best_col)][po],
+                fuelcost[(best_row, best_col)][po],
+                nc[best_row, best_col]
             ])
 
-            croute = 1
-
-            for j in range(1, n_routes):
-
-                if not choiceset[j, f]:
+            for route_row, route_col in available:
+                if (
+                    choiceset[route_row, route_col] is None or
+                    choiceset[route_row, route_col] == ""
+                ):
                     continue
 
                 b0 = np.array([
-                    route_len[j, f],
-                    tt[(j, f)][po, 0],
-                    pltt[(j, f)][po, 0],
-                    fuelcost[(j, f)][po, 0],
-                    nc[j, f]
+
+                    route_len[route_row, route_col],
+                    tt[(route_row, route_col)][po],
+                    pltt[(route_row, route_col)][po],
+                    fuelcost[(route_row, route_col)][po],
+                    nc[route_row, route_col]
                 ])
 
                 b = b1 - b0
@@ -1042,10 +1067,11 @@ def comassignment(
 
                 if choice != 1:
                     b1 = b0
-                    croute = j + 1
+                    best_row = route_row
+                    best_col = route_col
 
-            nchoice[i] = croute
-            rposition[i] = f
+            nchoice[i] = best_row
+            rposition[i] = best_col
 
     # ------------------------------------------------------------------
     # Fixed-route users
@@ -1149,7 +1175,7 @@ def comassignment(
         for j in range(x + len(p_agent)):
             ypath.append(
                 choiceset[
-                    int(final_choice[j]) - 1,
+                    int(final_choice[j]),
                     int(final_rposition[j])
                 ]
             )
