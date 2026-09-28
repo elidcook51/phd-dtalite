@@ -200,17 +200,25 @@ def msa(bigloop, p, p_fix, p_realtime):
         'DTALite_Files/SiouxFalls_net.xlsx',
         sheet_name ='weights',
         usecols = 'A:E',
-        skiprows = 1,
-        nrows = 2
+        skiprows = 0,
+        nrows = 3,
+        header = None,
     ).values
 
     meanstd2 = pd.read_excel(
         'DTALite_Files/SiouxFalls_net.xlsx',
         sheet_name = 'weights',
         usecols = 'H:L',
-        skiprows = 1,
-        nrows = 2
+        skiprows = 0,
+        nrows = 3,
+        header = None,
     ).values
+
+    meanstd28 = meanstd28[1:3].astype(float)
+    meanstd2 = meanstd2[1:3].astype(float)
+
+    print(meanstd2)
+    print(meanstd2.shape)
 
     a0 = np.zeros((dsize, 3))
 
