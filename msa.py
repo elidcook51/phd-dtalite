@@ -217,9 +217,6 @@ def msa(bigloop, p, p_fix, p_realtime):
     meanstd28 = meanstd28[1:3].astype(float)
     meanstd2 = meanstd2[1:3].astype(float)
 
-    print(meanstd2)
-    print(meanstd2.shape)
-
     a0 = np.zeros((dsize, 3))
 
     for i in range(dsize):
@@ -540,8 +537,6 @@ def msa(bigloop, p, p_fix, p_realtime):
     print('Starting comassignment')
     print('\n' * 5)
     print('#' * 20)
-
-    print(meanstd2.shape)
 
     (
         com_choice,
