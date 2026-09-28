@@ -606,6 +606,9 @@ def comrealtimeassignment(
             nc[best_row, best_col]
         ])
 
+        pre_b1 = b1.copy()
+        pre_route = best_row.copy()
+
         for route_row, route_col in available:
             if (
                 choiceset[route_row, route_col] is None or
@@ -621,6 +624,8 @@ def comrealtimeassignment(
                 float(fuelcost[(route_row, route_col, po)]),
                 nc[route_row, route_col]
             ])
+
+            pre_b0 = b0.copy()
 
             b = b1 - b0
 
@@ -660,8 +665,13 @@ def comrealtimeassignment(
                 best_row = route_row
                 best_col = route_col
 
+            if pre_b1[1] >= pre_b0[1]:
+                pre_b1 = pre_b0
+                pre_route = route_row
+
         rtchoice[i] = best_row
         updaterposition[i] = best_col
+        pre_choice[i] = pre_route
 
         # ff = np.where(
         #     (routelocation[:, 0] ==
