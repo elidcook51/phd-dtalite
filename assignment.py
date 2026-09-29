@@ -1236,15 +1236,8 @@ def comassignment(
                 "value_of_time",
             ],
         )
-
-        print(df.iloc[:10,11])
         
         df.to_csv("DTALite_Files/input_agent.csv", index=False)
-
-        with open("DTALite_Files/input_agent.csv", "r") as f:
-            for _ in range(5):
-                print(f.readline().rstrip())
-
 
         subprocess.run(
             [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
