@@ -1203,7 +1203,6 @@ def comassignment(
 
         for j in range(x + len(p_agent)):
             print(type(inputagent))
-            print(inputagent.shape)
 
             print(type(inputagent[0][11]))
             print(repr(inputagent[0][11]))
