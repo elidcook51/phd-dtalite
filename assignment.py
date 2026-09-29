@@ -1177,6 +1177,46 @@ def comassignment(
                 [final_pre_position, np.asarray(pre_position)]
             )
 
+        row = int(final_choice[j])
+        col = int(final_rposition[j])
+
+        path = choiceset[row, col]
+
+        if (
+            isinstance(path, np.ndarray)
+            and len(path) == 0
+        ):
+            print(
+                "BAD ROUTE",
+                j,
+                "row=", row,
+                "col=", col,
+                "OD=",
+                inputagent[j][4],
+                inputagent[j][5]
+            )
+
+        bad = np.where(
+            np.array([
+                isinstance(
+                    choiceset[
+                        int(final_choice[k]),
+                        int(final_rposition[k])
+                    ],
+                    np.ndarray
+                )
+                and len(
+                    choiceset[
+                        int(final_choice[k]),
+                        int(final_rposition[k])
+                    ]
+                ) == 0
+                for k in range(len(final_choice))
+            ])
+        )[0]
+
+        print("Bad agents:", bad[:20])
+
         ypath = []
 
         for j in range(x + len(p_agent)):
