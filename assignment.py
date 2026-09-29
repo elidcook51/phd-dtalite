@@ -1177,6 +1177,20 @@ def comassignment(
                 [final_pre_position, np.asarray(pre_position)]
             )
 
+        j = 4
+
+        row = int(final_choice[j])
+        col = int(final_rposition[j])
+
+        print("Agent 4")
+        print("choice:", row, col)
+
+        print("path object:")
+        print(repr(choiceset[row, col]))
+
+        print("type:")
+        print(type(choiceset[row, col]))
+
         ypath = []
 
         for j in range(x + len(p_agent)):
