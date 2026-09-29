@@ -673,115 +673,17 @@ def comrealtimeassignment(
                 pre_route = route_row
                 pre_col = route_col
 
+        if agent_id == 4:
+            print("ASSIGNING AGENT 4")
+            print("available =", available)
+            print("chosen =", best_row, best_col)
+
+            print(f'Default Route: {nchoice[agent_id]} {rposition[agent_id]}')
+
         rtchoice[i] = best_row
         updaterposition[i] = best_col
         pre_choice[i] = pre_route
         pre_position[i] = pre_col
-
-        # ff = np.where(
-        #     (routelocation[:, 0] ==
-        #      agentOD[agent_id + 1, 0])
-        #     &
-        #     (routelocation[:, 1] ==
-        #      agentOD[agent_id + 1, 1])
-        # )[0]
-
-        # f = int(routelocation[ff[0], 3])
-
-        # po = itr * phlength
-
-        # available_routes = [
-        #     r for r in range(len(choiceset))
-        #     if tt[r][f] is not None
-        # ]
-
-        # if len(available_routes) == 0:
-        #     continue
-
-        # best_route = available_routes[0]
-
-        # b1 = [
-        #     len_mat[best_route, f],
-        #     tt[best_route][f][po],
-        #     pltt[best_route][f][po],
-        #     fuelcost[best_route][f][po],
-        #     nc[best_route, f],
-        # ]
-
-        # croute = best_route
-
-        # pre_b1 = b1.copy()
-
-        # croute = 0
-        # pre_croute = 0
-
-        # for j in range(1, n_routes):
-
-        #     if not choiceset[j]:
-        #         continue
-
-        #     b0 = np.array([
-        #         len_mat[j, f],
-        #         tt[(j, f, po)],
-        #         pltt[(j, f, po)],
-        #         fuelcost[(j, f, po)],
-        #         nc[j, f]
-        #     ])
-
-        #     pre_b0 = b0.copy()
-
-        #     bdiff = b1 - b0
-
-        #     if i in onlylike1:
-
-        #         choice = 0
-
-        #     elif i in onlylike0:
-
-        #         choice = 1
-
-        #     else:
-
-        #         if user[i, 1] < 16650:
-
-        #             bscale = bdiff.copy()
-
-        #             ojvalue = np.sum(
-        #                 bscale * weights[int(user[i, 1]), :5]
-        #             )
-
-        #         else:
-
-        #             bscale = (
-        #                 bdiff
-        #                 - meanstd2[0, :]
-        #             )
-
-        #             bscale = (
-        #                 bscale
-        #                 / meanstd2[1, :]
-        #             )
-
-        #             ojvalue = np.sum(
-        #                 bscale * weights[int(user[i, 1]), :5]
-        #             )
-
-        #         if abs(ojvalue - 1) > abs(ojvalue + 1):
-        #             choice = 0
-        #         else:
-        #             choice = 1
-
-        #     if choice != 1:
-        #         b1 = b0
-        #         croute = j
-
-        #     if pre_b1[1] >= pre_b0[1]:
-        #         pre_croute = j
-        #         pre_b1 = pre_b0
-
-        # rtchoice[i] = croute
-        # updaterposition[i] = f
-        # pre_choice[i] = pre_croute
 
     # --------------------------------------------------
     # Save final iteration route information
