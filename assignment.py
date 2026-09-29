@@ -1187,6 +1187,54 @@ def comassignment(
                 ]
             )
 
+        for j in range(len(inputagent)):
+
+            path = ypath[j]
+
+            nodes = [
+                int(x)
+                for x in str(path).split(";")
+                if str(x).strip()
+            ]
+
+            if len(nodes) == 0:
+
+                print(
+                    "EMPTY PATH",
+                    j,
+                    final_choice[j],
+                    final_rposition[j]
+                )
+
+                raise RuntimeError("Empty path")
+
+            origin = int(inputagent[j][4])
+            destination = int(inputagent[j][5])
+
+            if nodes[0] != origin:
+
+                print(
+                    "BAD ORIGIN",
+                    j,
+                    origin,
+                    destination,
+                    nodes
+                )
+
+                raise RuntimeError("Origin mismatch")
+
+            if nodes[-1] != destination:
+
+                print(
+                    "BAD DESTINATION",
+                    j,
+                    origin,
+                    destination,
+                    nodes
+                )
+
+                raise RuntimeError("Destination mismatch")
+
         for j in range(x + len(p_agent)):
             inputagent[j][11] = ypath[j]
 
@@ -1215,22 +1263,6 @@ def comassignment(
                 "value_of_time",
             ],
         ).to_csv("DTALite_Files/input_agent.csv", index=False)
-
-        print("Agent 4 row:")
-        print(inputagent[4])
-
-        print(
-            "chosen route:",
-            final_choice[4],
-            final_rposition[4]
-        )
-
-        print(
-            choiceset[
-                int(final_choice[4]),
-                int(final_rposition[4])
-            ]
-        )
 
         subprocess.run(
             [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
