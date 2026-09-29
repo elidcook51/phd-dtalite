@@ -1186,6 +1186,36 @@ def comassignment(
 
         ypath = []
 
+        path = choiceset[
+            int(final_choice[j]),
+            int(final_rposition[j])
+        ]
+
+        if j < 5:
+            print(
+                j,
+                type(path),
+                repr(path)
+            )
+
+        ypath.append(path)
+
+        j = 0
+
+        print(type(final_choice[j]))
+        print(repr(final_choice[j]))
+
+        print(type(final_rposition[j]))
+        print(repr(final_rposition[j]))
+
+        path = choiceset[
+            int(final_choice[j]),
+            int(final_rposition[j])
+        ]
+
+        print(type(path))
+        print(repr(path))
+
         for j in range(x + len(p_agent)):
             ypath.append(
                 choiceset[
@@ -1193,45 +1223,6 @@ def comassignment(
                     int(final_rposition[j])
                 ]
             )
-
-        #==========================
-        # VALIDATION BLOCK
-        # ==========================
-
-        j = 0
-
-        path = ypath[j]
-
-        print("Agent 0 path:")
-        print(path)
-
-        nodes = [
-            int(x)
-            for x in str(path).split(";")
-            if str(x).strip()
-            ]
-
-        valid_links = set(
-            zip(
-                links["from_node_id"],
-                links["to_node_id"]
-            )
-        )
-
-        for a, b in zip(nodes[:-1], nodes[1:]):
-
-            if (a, b) not in valid_links:
-
-                print(
-                    "BAD LINK:",
-                    a,
-                    "->",
-                    b
-                )
-
-        # ==========================
-        # END VALIDATION
-        # ==========================
 
         for j in range(x + len(p_agent)):
             inputagent[j][11] = ypath[j]
