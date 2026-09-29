@@ -1092,6 +1092,21 @@ def comassignment(
         num_tdlink_rows,
     )
 
+    bad = np.where(
+        (nchoice == 0)
+        &
+        (rposition == 0)
+    )[0]
+
+    print("Unassigned:", len(bad))
+
+    for k in bad[:20]:
+        print(
+            k,
+            inputagent[k][4],
+            inputagent[k][5]
+        )
+
     # ------------------------------------------------------------------
     # Save path information
     # ------------------------------------------------------------------
@@ -1122,28 +1137,6 @@ def comassignment(
         p_agent = p_agent[
             (360 + phlength * (subitr - 1)) < p_agent[:, 0]
         ]
-
-        print(
-            "before realtime",
-            nchoice[4],
-            rposition[4]
-        )
-
-        print(
-            choiceset[
-                int(nchoice[4]),
-                int(rposition[4])
-            ]
-        )
-
-        bad = np.where(
-            (nchoice == 0)
-            &
-            (rposition == 0)
-        )[0]
-
-        print("zero-zero assignments:", len(bad))
-        print(bad[:50])
 
         (
             ite_choice,
