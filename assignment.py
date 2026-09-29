@@ -1216,11 +1216,15 @@ def comassignment(
 
         final_inputagent = inputagent[: (x + len(p_agent))]
 
-        for j in range(10):
+        print("inputagent shape:", np.shape(inputagent))
+        print("final_inputagent shape:", np.shape(final_inputagent))
+
+        print("row 0:")
+        for k in range(15):
             print(
-                j,
-                type(inputagent[j][11]),
-                inputagent[j][11]
+                k,
+                type(final_inputagent[0][k]),
+                final_inputagent[0][k]
             )
 
         pd.DataFrame(
