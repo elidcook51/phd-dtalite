@@ -599,6 +599,7 @@ def msa(bigloop, p, p_fix, p_realtime):
         com_rpositionOK,
         com_ttOK,
         com_tttOK,
+        com_informOK,
         pre_choiceOK,
         pre_positionOK
     ) = comassignment(
