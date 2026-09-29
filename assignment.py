@@ -1182,14 +1182,17 @@ def comassignment(
         row = int(final_choice[j])
         col = int(final_rposition[j])
 
-        print("Agent 4")
-        print("choice:", row, col)
+        print(
+            "agent 4 final:",
+            final_choice[4],
+            final_rposition[4]
+        )
 
-        print("path object:")
-        print(repr(choiceset[row, col]))
-
-        print("type:")
-        print(type(choiceset[row, col]))
+        print(
+            "agent 4 original:",
+            nchoice[4],
+            rposition[4]
+        )
 
         ypath = []
 
