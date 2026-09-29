@@ -1,6 +1,13 @@
 import os
 import numpy as np
 import pandas as pd
+from io import StringIO
+
+def read_csv_fix_trailing_comma(path):
+    with open(path, "r", encoding="utf-8") as f:
+        lines = [line.rstrip(",\n") + "\n" for line in f]
+
+    return pd.read_csv(StringIO("".join(lines)), dtype=str)
 
 matlab_folder = r"matlab_files"
 python_folder = r"python_files"
@@ -20,9 +27,13 @@ for filename in common_files:
     print(f"\nChecking {filename}")
 
     try:
-        # Read everything as strings initially
-        matlab_df = pd.read_csv(matlab_path, header=None, dtype=str)
-        python_df = pd.read_csv(python_path, header=None, dtype=str)
+        if 'TDMOE' in filename:
+            matlab_df = read_csv_fix_trailing_comma(matlab_path)
+            python_df = read_csv_fix_trailing_comma(python_path)
+        else:
+            # Read everything as strings initially
+            matlab_df = pd.read_csv(matlab_path, header=None, dtype=str)
+            python_df = pd.read_csv(python_path, header=None, dtype=str)
 
         # Shape check
         if matlab_df.shape != python_df.shape:
