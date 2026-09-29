@@ -1194,6 +1194,33 @@ def comassignment(
                 ]
             )
 
+        #==========================
+        # VALIDATION BLOCK
+        # ==========================
+
+        j = 0
+
+        path = ypath[j]
+
+        print("Agent 0 path:")
+        print(path)
+
+        nodes = [
+            int(x)
+            for x in str(path).split(";")
+            if str(x).strip()
+            ]
+
+        print("origin =", inputagent[j][4])
+        print("first node =", nodes[0])
+
+        print("destination =", inputagent[j][5])
+        print("last node =", nodes[-1])
+
+        # ==========================
+        # END VALIDATION
+        # ==========================
+
         for j in range(x + len(p_agent)):
             inputagent[j][11] = ypath[j]
 
