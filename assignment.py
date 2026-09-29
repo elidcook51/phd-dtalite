@@ -1194,23 +1194,16 @@ def comassignment(
                 ]
             )
 
-        print(type(ypath[0]))
-        print(repr(ypath[0]))
-
-        inputagent[0][11] = ypath[0]
-
-        print(repr(inputagent[0][11]))
-
         for j in range(x + len(p_agent)):
-            print(type(inputagent))
+            path = ypath[j]
 
-            print(type(inputagent[0][11]))
-            print(repr(inputagent[0][11]))
+            if isinstance(path, list):
+                path = path[0]
 
-            print(type(ypath[0]))
-            print(repr(ypath[0]))
+            elif isinstance(path, np.ndarray):
+                path = path.flat[0]
 
-            inputagent[j][11] = ypath[j]
+            inputagent[j][11] = str(path)
 
         if os.path.exists("DTALite_Files/input_agent.csv"):
             os.remove("DTALite_Files/input_agent.csv")
