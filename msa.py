@@ -153,6 +153,7 @@ def msa(bigloop, p, p_fix, p_realtime):
     num_tdlink_rows = len(temp_tdlink) - 1
 
     driver_ids = np.arange(dsize)
+    #member, realtime_user, fix_user = dividerand(driver_ids, p, p_realtime, p_fix)
     member, realtime_user, fix_user = dividerand_matlab(bigloop)
 
     mat = loadmat('DTALite_Files/choice set no overlap try.mat', simplify_cells = True)
