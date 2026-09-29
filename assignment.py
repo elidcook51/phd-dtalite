@@ -1204,6 +1204,7 @@ def comassignment(
 
             if isinstance(path, list):
                 print('FOUND LIST')
+                print(path)
                 path = path[0]
                 raise SystemExit
 
