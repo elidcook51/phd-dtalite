@@ -1209,9 +1209,16 @@ def comassignment(
                 raise SystemExit
 
             elif isinstance(path, np.ndarray):
+                print('FOUND LIST')
+                print(path)
                 path = path.flat[0]
+                raise SystemExit
 
             inputagent[j][11] = str(path)
+
+        print(inputagent[0][11])
+        print(inputagent[1][11])
+        print(inputagent[2][11])
 
         if os.path.exists("DTALite_Files/input_agent.csv"):
             os.remove("DTALite_Files/input_agent.csv")
