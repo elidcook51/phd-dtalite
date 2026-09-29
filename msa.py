@@ -599,7 +599,7 @@ def msa(bigloop, p, p_fix, p_realtime):
         {
             'cc': cc,
             'rprime': rprime,
-            'linkV': np.array(linkV, dypte = object),
+            'linkV': np.array(linkV, dtype = object),
             'choice': pre_choice,
             'position': pre_position
         }
