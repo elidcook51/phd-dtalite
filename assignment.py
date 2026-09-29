@@ -1224,7 +1224,17 @@ def comassignment(
                 ]
             )
 
+
         for j in range(x + len(p_agent)):
+            print(type(inputagent))
+            print(inputagent.shape)
+
+            print(type(inputagent[0][11]))
+            print(repr(inputagent[0][11]))
+
+            print(type(ypath[0]))
+            print(repr(ypath[0]))
+            
             inputagent[j][11] = ypath[j]
 
         if os.path.exists("DTALite_Files/input_agent.csv"):
