@@ -570,7 +570,7 @@ def msa(bigloop, p, p_fix, p_realtime):
     for j in range(dsize):
 
         inputagent[j][11] = choiceset[
-            int(com_rposition[j])
+            com_choice, com_rposition
         ]
 
     pd.DataFrame(inputagent, columns=columns).to_csv('DTALite_Files/input_agent.csv', index = False)

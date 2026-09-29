@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import pickle
 from traveltimecal import traveltimecal, traveltimecal_fast, traveltimecal_fastv2
-from realtimeassignment import realtimeassignment, comrealtimeassignment, realtimeassignment_fast
+from realtimeassignment import comrealtimeassignment, realtimeassignment_fast
 import time
 
 #Need input_agent.csv, output_agent.csv
@@ -1201,24 +1201,6 @@ def comassignment(
             os.remove("DTALite_Files/input_agent.csv")
 
         final_inputagent = inputagent[: (x + len(p_agent))]
-
-        print("Agent 0")
-
-        print(
-            "choice:",
-            final_choice[0],
-            final_rposition[0]
-        )
-
-        path = choiceset[
-            int(final_choice[0]),
-            int(final_rposition[0])
-        ]
-
-        print("path:", repr(path))
-
-        print("origin:", inputagent[0][4])
-        print("destination:", inputagent[0][5])
 
         pd.DataFrame(
             final_inputagent,
