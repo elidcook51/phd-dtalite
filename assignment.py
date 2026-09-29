@@ -1248,6 +1248,7 @@ def comassignment(
         final_rposition,
         tt,
         ttt,
+        b,
         final_pre_choice,
         final_pre_position
     )
