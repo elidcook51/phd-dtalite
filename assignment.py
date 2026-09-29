@@ -1216,18 +1216,7 @@ def comassignment(
 
         final_inputagent = inputagent[: (x + len(p_agent))]
 
-        print("inputagent shape:", np.shape(inputagent))
-        print("final_inputagent shape:", np.shape(final_inputagent))
-
-        print("row 0:")
-        for k in range(15):
-            print(
-                k,
-                type(final_inputagent[0][k]),
-                final_inputagent[0][k]
-            )
-
-        pd.DataFrame(
+        df = pd.DataFrame(
             final_inputagent,
             columns=[
                 "agent_id",
@@ -1246,7 +1235,16 @@ def comassignment(
                 "pricing_type",
                 "value_of_time",
             ],
-        ).to_csv("DTALite_Files/input_agent.csv", index=False)
+        )
+
+        print(df.iloc[:10,11])
+        
+        df.to_csv("DTALite_Files/input_agent.csv", index=False)
+
+        with open("DTALite_Files/input_agent.csv", "r") as f:
+            for _ in range(5):
+                print(f.readline().rstrip())
+
 
         subprocess.run(
             [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
