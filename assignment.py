@@ -1186,36 +1186,6 @@ def comassignment(
 
         ypath = []
 
-        path = choiceset[
-            int(final_choice[j]),
-            int(final_rposition[j])
-        ]
-
-        if j < 5:
-            print(
-                j,
-                type(path),
-                repr(path)
-            )
-
-        ypath.append(path)
-
-        j = 0
-
-        print(type(final_choice[j]))
-        print(repr(final_choice[j]))
-
-        print(type(final_rposition[j]))
-        print(repr(final_rposition[j]))
-
-        path = choiceset[
-            int(final_choice[j]),
-            int(final_rposition[j])
-        ]
-
-        print(type(path))
-        print(repr(path))
-
         for j in range(x + len(p_agent)):
             ypath.append(
                 choiceset[
@@ -1234,7 +1204,7 @@ def comassignment(
 
             print(type(ypath[0]))
             print(repr(ypath[0]))
-            
+
             inputagent[j][11] = ypath[j]
 
         if os.path.exists("DTALite_Files/input_agent.csv"):
