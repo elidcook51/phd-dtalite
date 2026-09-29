@@ -1197,11 +1197,23 @@ def comassignment(
         for j in range(x + len(p_agent)):
             path = ypath[j]
 
+            print(j, type(path))
+
+            if isinstance(path, np.ndarray):
+                print("shape:", path.shape)
+
             if isinstance(path, list):
                 path = path[0]
 
             elif isinstance(path, np.ndarray):
                 path = path.flat[0]
+
+            print(
+                j,
+                type(path),
+                getattr(path, "shape", None),
+                path
+            )
 
             inputagent[j][11] = str(path)
 
