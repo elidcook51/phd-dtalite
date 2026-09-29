@@ -1194,26 +1194,21 @@ def comassignment(
                 ]
             )
 
+            print(int(final_choice[j]))
+            print(int(final_rposition[j]))
+
         for j in range(x + len(p_agent)):
             path = ypath[j]
 
             print(j, type(path))
 
-            if isinstance(path, np.ndarray):
-                print("shape:", path.shape)
-
             if isinstance(path, list):
+                print('FOUND LIST')
                 path = path[0]
+                raise SystemExit
 
             elif isinstance(path, np.ndarray):
                 path = path.flat[0]
-
-            print(
-                j,
-                type(path),
-                getattr(path, "shape", None),
-                path
-            )
 
             inputagent[j][11] = str(path)
 
