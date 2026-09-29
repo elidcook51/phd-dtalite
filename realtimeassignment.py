@@ -673,13 +673,6 @@ def comrealtimeassignment(
                 pre_route = route_row
                 pre_col = route_col
 
-        if agent_id == 4:
-            print("ASSIGNING AGENT 4")
-            print("available =", available)
-            print("chosen =", best_row, best_col)
-
-            print(f'Default Route: {nchoice[agent_id]} {rposition[agent_id]}')
-
         rtchoice[i] = best_row
         updaterposition[i] = best_col
         pre_choice[i] = pre_route

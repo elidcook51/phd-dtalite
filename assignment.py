@@ -1123,6 +1123,28 @@ def comassignment(
             (360 + phlength * (subitr - 1)) < p_agent[:, 0]
         ]
 
+        print(
+            "before realtime",
+            nchoice[4],
+            rposition[4]
+        )
+
+        print(
+            choiceset[
+                int(nchoice[4]),
+                int(rposition[4])
+            ]
+        )
+
+        bad = np.where(
+            (nchoice == 0)
+            &
+            (rposition == 0)
+        )[0]
+
+        print("zero-zero assignments:", len(bad))
+        print(bad[:50])
+
         (
             ite_choice,
             updaterposition,
@@ -1178,21 +1200,6 @@ def comassignment(
             )
 
         j = 4
-
-        row = int(final_choice[j])
-        col = int(final_rposition[j])
-
-        print(
-            "agent 4 final:",
-            final_choice[4],
-            final_rposition[4]
-        )
-
-        print(
-            "agent 4 original:",
-            nchoice[4],
-            rposition[4]
-        )
 
         ypath = []
 
