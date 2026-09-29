@@ -9,7 +9,7 @@ import time
 
 
 def dividerand_matlab(bigloop):
-    filename = f"{bigloop}_userassignment.mat"
+    filename = f"DTALite_Files/{bigloop}_userassignment.mat"
 
     data = loadmat(filename)
 
