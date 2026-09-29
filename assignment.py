@@ -1194,6 +1194,12 @@ def comassignment(
                 ]
             )
 
+        print(type(ypath[0]))
+        print(repr(ypath[0]))
+
+        inputagent[0][11] = ypath[0]
+
+        print(repr(inputagent[0][11]))
 
         for j in range(x + len(p_agent)):
             print(type(inputagent))
