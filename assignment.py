@@ -101,7 +101,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
             path = choiceset[i, col]
 
-            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "":
+            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "" or str(path).strip() == "[]":
                 continue
 
             nodes = [
@@ -527,7 +527,7 @@ def fixedcomassignment(
 
             path = choiceset[i][h]
 
-            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "":
+            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "" or str(path).strip() == "[]":
                 continue
             m = 1
             agentn = []
@@ -841,7 +841,7 @@ def comassignment(
 
             path = choiceset[i, h]
 
-            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "":
+            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "" or str(path).strip() == "[]":
                 continue
 
             nodes = [
@@ -876,7 +876,7 @@ def comassignment(
 
             path = choiceset[i, h]
 
-            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "":
+            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "" or str(path).strip() == "[]":
                 continue
 
             m = 1
@@ -1177,46 +1177,6 @@ def comassignment(
                 [final_pre_position, np.asarray(pre_position)]
             )
 
-        row = int(final_choice[j])
-        col = int(final_rposition[j])
-
-        path = choiceset[row, col]
-
-        if (
-            isinstance(path, np.ndarray)
-            and len(path) == 0
-        ):
-            print(
-                "BAD ROUTE",
-                j,
-                "row=", row,
-                "col=", col,
-                "OD=",
-                inputagent[j][4],
-                inputagent[j][5]
-            )
-
-        bad = np.where(
-            np.array([
-                isinstance(
-                    choiceset[
-                        int(final_choice[k]),
-                        int(final_rposition[k])
-                    ],
-                    np.ndarray
-                )
-                and len(
-                    choiceset[
-                        int(final_choice[k]),
-                        int(final_rposition[k])
-                    ]
-                ) == 0
-                for k in range(len(final_choice))
-            ])
-        )[0]
-
-        print("Bad agents:", bad[:20])
-
         ypath = []
 
         for j in range(x + len(p_agent)):
@@ -1226,54 +1186,6 @@ def comassignment(
                     int(final_rposition[j])
                 ]
             )
-
-        for j in range(len(inputagent)):
-
-            path = ypath[j]
-
-            nodes = [
-                int(x)
-                for x in str(path).split(";")
-                if str(x).strip()
-            ]
-
-            if len(nodes) == 0:
-
-                print(
-                    "EMPTY PATH",
-                    j,
-                    final_choice[j],
-                    final_rposition[j]
-                )
-
-                raise RuntimeError("Empty path")
-
-            origin = int(inputagent[j][4])
-            destination = int(inputagent[j][5])
-
-            if nodes[0] != origin:
-
-                print(
-                    "BAD ORIGIN",
-                    j,
-                    origin,
-                    destination,
-                    nodes
-                )
-
-                raise RuntimeError("Origin mismatch")
-
-            if nodes[-1] != destination:
-
-                print(
-                    "BAD DESTINATION",
-                    j,
-                    origin,
-                    destination,
-                    nodes
-                )
-
-                raise RuntimeError("Destination mismatch")
 
         for j in range(x + len(p_agent)):
             inputagent[j][11] = ypath[j]
