@@ -363,7 +363,7 @@ def comrealtimeassignment(
     if itr == int(np.floor(60 / phlength)):
 
         savemat(
-            f"pathinfo_comrealass{bigloop}.mat",
+            f"DTALite_Files/pathinfo_comrealass{bigloop}.mat",
             {
                 "len": len_mat,
                 "tt": tt,

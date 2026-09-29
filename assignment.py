@@ -299,7 +299,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
     if itr == 18:
 
         savemat(
-            f"pathinfo_ass{bigloop}.mat",
+            f"DTALite_Files/pathinfo_ass{bigloop}.mat",
             {
                 'len': route_length,
                 'tt': tt,
@@ -1101,7 +1101,7 @@ def comassignment(
     # Save path information
     # ------------------------------------------------------------------
     scipy.io.savemat(
-        f"pathinfo_comass{bigloop}.mat",
+        f"DTALite_Files/pathinfo_comass{bigloop}.mat",
         {
             "len": route_len,
             "tt": tt,
