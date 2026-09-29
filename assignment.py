@@ -1005,6 +1005,11 @@ def comassignment(
         if len(available) == 0:
             continue
 
+        best_row, best_col = available[0]
+
+        nchoice[i] = best_row
+        rposition[i] = best_col
+
         if i in member:
 
             best_row, best_col = available[0]
@@ -1091,21 +1096,6 @@ def comassignment(
         dsize,
         num_tdlink_rows,
     )
-
-    bad = np.where(
-        (nchoice == 0)
-        &
-        (rposition == 0)
-    )[0]
-
-    print("Unassigned:", len(bad))
-
-    for k in bad[:20]:
-        print(
-            k,
-            inputagent[k][4],
-            inputagent[k][5]
-        )
 
     # ------------------------------------------------------------------
     # Save path information
