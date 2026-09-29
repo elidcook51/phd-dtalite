@@ -1211,11 +1211,23 @@ def comassignment(
             if str(x).strip()
             ]
 
-        print("origin =", inputagent[j][4])
-        print("first node =", nodes[0])
+        valid_links = set(
+            zip(
+                links["from_node_id"],
+                links["to_node_id"]
+            )
+        )
 
-        print("destination =", inputagent[j][5])
-        print("last node =", nodes[-1])
+        for a, b in zip(nodes[:-1], nodes[1:]):
+
+            if (a, b) not in valid_links:
+
+                print(
+                    "BAD LINK:",
+                    a,
+                    "->",
+                    b
+                )
 
         # ==========================
         # END VALIDATION
