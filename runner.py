@@ -44,7 +44,7 @@ for i in range(11):
 
     shutil.copyfile(src, dst)
 
-    msa(i, p, p_fix, p_realtime)
+    msa.msa(i, p, p_fix, p_realtime)
 
     for file in files_to_delete:
         if os.path.exists(file):
