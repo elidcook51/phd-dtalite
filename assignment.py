@@ -1194,13 +1194,8 @@ def comassignment(
                 ]
             )
 
-            print(int(final_choice[j]))
-            print(int(final_rposition[j]))
-
         for j in range(x + len(p_agent)):
             path = ypath[j]
-
-            print(j, type(path))
 
             if isinstance(path, list):
                 print('FOUND LIST')
@@ -1216,14 +1211,17 @@ def comassignment(
 
             inputagent[j][11] = str(path)
 
-        print(inputagent[0][11])
-        print(inputagent[1][11])
-        print(inputagent[2][11])
-
         if os.path.exists("DTALite_Files/input_agent.csv"):
             os.remove("DTALite_Files/input_agent.csv")
 
         final_inputagent = inputagent[: (x + len(p_agent))]
+
+        for j in range(10):
+            print(
+                j,
+                type(inputagent[j][11]),
+                inputagent[j][11]
+            )
 
         pd.DataFrame(
             final_inputagent,
