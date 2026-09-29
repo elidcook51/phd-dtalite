@@ -1233,7 +1233,7 @@ def comassignment(
                 "path_node_sequence",
                 "vehicle_type",
                 "pricing_type",
-                "value_of_time",
+                "value_of_time"
             ],
         )
         
