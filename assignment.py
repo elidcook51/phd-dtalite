@@ -490,7 +490,7 @@ def fixedcomassignment(
 
         for i in range(num_routes):
 
-            path = choiceset[i][h]
+            path = choiceset[i, h]
 
             if (
                 path is None
@@ -525,7 +525,7 @@ def fixedcomassignment(
 
         for i in range(num_routes):
 
-            path = choiceset[i][h]
+            path = choiceset[i, h]
 
             if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "" or str(path).strip() == "[]":
                 continue
@@ -1201,6 +1201,24 @@ def comassignment(
             os.remove("DTALite_Files/input_agent.csv")
 
         final_inputagent = inputagent[: (x + len(p_agent))]
+
+        print("Agent 0")
+
+        print(
+            "choice:",
+            final_choice[0],
+            final_rposition[0]
+        )
+
+        path = choiceset[
+            int(final_choice[0]),
+            int(final_rposition[0])
+        ]
+
+        print("path:", repr(path))
+
+        print("origin:", inputagent[0][4])
+        print("destination:", inputagent[0][5])
 
         pd.DataFrame(
             final_inputagent,
