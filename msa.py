@@ -167,20 +167,6 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     routelocation = np.array(routelocation)
 
-    print("choiceset shape =", choiceset.shape)
-
-    print(
-        "routelocation col3 range:",
-        routelocation[:,3].min(),
-        routelocation[:,3].max()
-    )
-
-    print(
-        "routelocation col4 range:",
-        routelocation[:,4].min(),
-        routelocation[:,4].max()
-    )
-
     od_to_column = {}
 
     for row in routelocation:
