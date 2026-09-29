@@ -594,32 +594,6 @@ def msa(bigloop, p, p_fix, p_realtime):
         f"DTALite_Files/{bigloop}actual_LinkTDMOE.csv"
     )
 
-    (
-        com_choiceOK,
-        com_rpositionOK,
-        com_ttOK,
-        com_tttOK,
-        com_informOK,
-        pre_choiceOK,
-        pre_positionOK
-    ) = comassignment(
-        2,
-        choiceset,
-        user,
-        routelocation,
-        realweights,
-        meanstd28,
-        meanstd2,
-        member,
-        fix_user,
-        realtime_user,
-        a0,
-        inputagent,
-        bigloop + 100,
-        dsize,
-        num_tdlink_rows
-    )
-
     savemat(
         f"DTALite_Files/myfile{bigloop}.mat",
         {
