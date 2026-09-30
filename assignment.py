@@ -366,7 +366,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
         start_time = time.time()
         print("Starting DTA Lite running!")
         subprocess.run(
-            ['DTALite_Files/DTAlite.exe'], cwd = 'DTALite_Files', check = True
+            ['DTALite_Files/DTALite.exe'], cwd = 'DTALite_Files', check = True
         )  
         print(f"Finished DTA Lite in {time.time() - start_time}")
 
