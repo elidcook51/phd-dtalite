@@ -1206,11 +1206,11 @@ def fixedcomassignment(
 
 
 
-            tt[(i, h)] = np.zeros((300, 1))
+            tt[(i, h)] = np.zeros(300)
 
-            pltt[(i, h)] = np.zeros((300, 1))
+            pltt[(i, h)] = np.zeros(300)
 
-            fuelcost[(i, h)] = np.zeros((300, 1))
+            fuelcost[(i, h)] = np.zeros(300)
 
 
 
@@ -1908,11 +1908,11 @@ def comassignment(
 
 
 
-            tt[(i, h)] = np.zeros((300, 1))
+            tt[(i, h)] = np.zeros(300)
 
-            pltt[(i, h)] = np.zeros((300, 1))
+            pltt[(i, h)] = np.zeros(300)
 
-            fuelcost[(i, h)] = np.zeros((300, 1))
+            fuelcost[(i, h)] = np.zeros(300)
 
 
 
