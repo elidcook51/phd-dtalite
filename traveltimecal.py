@@ -334,19 +334,16 @@ def traveltimecal_fast(timestamp, TDlink, path, length_data, gas, itr, empty):
 
 def traveltimecal_fastv2(timestamp, TDlink, path, length_data, gas, itr, empty):
 
-    if not hasattr(traveltimecal_fastv2, 'tdlink_map'):
-        traveltimecal_fastv2.tdlink_map = {}
-
-    if not hasattr(traveltimecal_fastv2, 'length_map'):
-        traveltimecal_fastv2.length_map = {}
-
-    if not hasattr(traveltimecal_fastv2, 'path_cache'):
-        traveltimecal_fastv2.path_cache = {}
-
-    if not hasattr(traveltimecal_fastv2, 'path_result_cache'):
-        traveltimecal_fastv2.path_result_cache = {}
-
-    if len(traveltimecal_fastv2.tdlink_map) == 0:
+    # The TD-link table is re-read after every DTALite run, so the lookup
+    # caches must be rebuilt whenever a different table object is passed
+    # in. Object identity keeps repeated calls with the same table fast
+    # while preventing stale travel times from leaking across iterations.
+    if (
+        getattr(traveltimecal_fastv2, '_tdlink_ref', None) is not TDlink
+        or getattr(traveltimecal_fastv2, '_length_ref', None) is not length_data
+    ):
+        traveltimecal_fastv2._tdlink_ref = TDlink
+        traveltimecal_fastv2._length_ref = length_data
 
         print('Building TDLink cache...')
 
@@ -357,7 +354,7 @@ def traveltimecal_fastv2(timestamp, TDlink, path, length_data, gas, itr, empty):
                 int(row[1])
             ): float(row[3])
             for row in TDlink
-        } 
+        }
 
         print(f"TDLink entries = ")
         print(f"{len(traveltimecal_fastv2.tdlink_map):,}")
@@ -378,7 +375,10 @@ def traveltimecal_fastv2(timestamp, TDlink, path, length_data, gas, itr, empty):
         print('Length entries = ')
         print(f"{len(traveltimecal_fastv2.length_map):,}")
 
-        traveltimecal_fastv2.path_result_cache.clear()
+        traveltimecal_fastv2.path_result_cache = {}
+
+    if not hasattr(traveltimecal_fastv2, 'path_cache'):
+        traveltimecal_fastv2.path_cache = {}
 
     if path not in traveltimecal_fastv2.path_cache:
 
