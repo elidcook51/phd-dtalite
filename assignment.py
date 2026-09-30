@@ -208,7 +208,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-    link_lengths = pd.read_excel('DTALite_Files/SiouxFalls_net.xlsx', sheet_name = 0, usecols = 'B:E', skiprows = 89, nrows = 76).to_numpy()
+    link_lengths = pd.read_excel('DTALite_Files/SiouxFalls_net.xlsx', sheet_name = 0, usecols = 'B:E', skiprows = 89, nrows = 76, header = None).to_numpy()
 
 
 
@@ -222,7 +222,9 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-    data = np.arange(len(link_lengths))
+    # 1-based indices so that a lookup miss (sparse default 0)
+    # is distinguishable from a real link.
+    data = np.arange(1, len(link_lengths) + 1)
 
 
 
@@ -326,15 +328,15 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
                 ):
 
-                    link_idx = link_lookup[n1, n2]
+                    link_idx = int(link_lookup[n1, n2])
 
 
 
-                    if link_idx >= 0:
+                    if link_idx > 0:
 
                         route_length[i, col] += (
 
-                            link_lengths[int(link_idx)-1,2]
+                            link_lengths[link_idx-1,2]
 
                         )
 
@@ -392,7 +394,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
             for k in range(60):
 
-                departure_time = k + 899
+                departure_time = k + 360
 
 
 
@@ -452,7 +454,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-        po = int(np.floor(agent[i, 1]) - 899)
+        po = int(np.floor(agent[i, 1]) - 359)
 
 
 
@@ -598,7 +600,27 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-                uid = int(user[i,1])
+                # MATLAB weights() is 1-based; user preference IDs are 1-based
+
+                uid = int(user[i,1]) - 1
+
+
+
+                if int(user[i,1]) < 16650:
+
+                    # Dataset28 distribution: no standardization
+
+                    bscale = diff
+
+                else:
+
+                    # Dataset 2 distribution: standardize with meanstd2
+
+                    bscale = (
+
+                        diff - meanstd2[0, :]
+
+                    ) / meanstd2[1, :]
 
 
 
@@ -606,13 +628,13 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
                     np.dot(
 
-                        diff,
+                        bscale,
 
                         weights[uid, :5]
 
                     )
 
-                    + weights[uid,5]
+                    + weights[uid, 5]
 
                 )
 
@@ -767,28 +789,6 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
         final_choice.extend(ite_choice)
 
         final_rposition.extend(updaterposition)
-
-
-
-        for k, (choice, pos) in enumerate(
-
-            zip(final_choice[:10], final_rposition[:10])
-
-        ):
-
-            print(
-
-                k,
-
-                type(choice),
-
-                choice,
-
-                type(pos),
-
-                pos
-
-            )
 
 
 
@@ -1028,7 +1028,13 @@ def fixedcomassignment(
 
     
 
-    length_data = links[['from_node_id', 'to_node_id', 'length']].to_numpy()
+    # MATLAB reads the link table as xlsread('SiouxFalls_net',1,'B90:E165'):
+    # (from_node, to_node, length, speed). The 4th column is required
+    # by traveltimecal_fastv2.
+    length_data = pd.read_excel(
+        'DTALite_Files/SiouxFalls_net.xlsx', sheet_name = 0,
+        usecols = 'B:E', skiprows = 89, nrows = 76, header = None
+    ).to_numpy()
 
 
 
@@ -1040,7 +1046,9 @@ def fixedcomassignment(
 
     col_idx = length_data[:,1].astype(int)
 
-    data = np.arange(len(length_data))
+    # 1-based indices so that a lookup miss (sparse default 0)
+    # is distinguishable from a real link.
+    data = np.arange(1, len(length_data) + 1)
 
 
 
@@ -1106,13 +1114,13 @@ def fixedcomassignment(
 
                 if (0 < n1 <= max_node and 0 < n2 <= max_node):
 
-                    link_idx = link_lookup[n1, n2]
+                    link_idx = int(link_lookup[n1, n2])
 
 
 
-                    if link_idx >= 0:
+                    if link_idx > 0:
 
-                        len_mat[i, h] += length_data[int(link_idx)-1,2]
+                        len_mat[i, h] += length_data[link_idx-1,2]
 
 
 
@@ -1206,19 +1214,19 @@ def fixedcomassignment(
 
 
 
-            tt[(i, h)] = np.zeros(300)
+            tt[(i, h)] = np.zeros(60)
 
-            pltt[(i, h)] = np.zeros(300)
+            pltt[(i, h)] = np.zeros(60)
 
-            fuelcost[(i, h)] = np.zeros(300)
-
-
-
-            for k in range(300):
+            fuelcost[(i, h)] = np.zeros((300, 1))
 
 
 
-                dep_time = k + 900  # MATLAB used (k+899) with k starting at 1
+            for k in range(60):
+
+
+
+                dep_time = k + 360  # MATLAB: (k+359) with k=1..60
 
 
 
@@ -1376,7 +1384,7 @@ def fixedcomassignment(
 
 
 
-            po = int(np.floor(agent[i, 1]) - 899)
+            po = int(np.floor(agent[i, 1]) - 359)
 
             po = max(1, min(po, 300))
 
@@ -1486,21 +1494,23 @@ def fixedcomassignment(
 
 
 
+                        # MATLAB weights() is 1-based; user preference IDs are 1-based
+
+                        uid = int(user[i, 1]) - 1
+
+
+
                         ojvalue = np.sum(
 
                             bscale *
 
-                            weights[int(user[i, 1]), :5]
+                            weights[uid, :5]
 
                         )
 
 
 
                     else:
-
-
-
-                        print(meanstd2.shape)
 
 
 
@@ -1512,11 +1522,15 @@ def fixedcomassignment(
 
 
 
+                        uid = int(user[i, 1]) - 1
+
+
+
                         ojvalue = np.sum(
 
                             bscale *
 
-                            weights[int(user[i, 1]), :5]
+                            weights[uid, :5]
 
                         )
 
@@ -1752,7 +1766,13 @@ def comassignment(
 
     
 
-    length_data = links[['from_node_id', 'to_node_id', 'length']].to_numpy()
+    # MATLAB reads the link table as xlsread('SiouxFalls_net',1,'B90:E165'):
+    # (from_node, to_node, length, speed). The 4th column is required
+    # by traveltimecal_fastv2.
+    length_data = pd.read_excel(
+        'DTALite_Files/SiouxFalls_net.xlsx', sheet_name = 0,
+        usecols = 'B:E', skiprows = 89, nrows = 76, header = None
+    ).to_numpy()
 
 
 
@@ -1908,19 +1928,19 @@ def comassignment(
 
 
 
-            tt[(i, h)] = np.zeros(300)
+            tt[(i, h)] = np.zeros((300, 1))
 
-            pltt[(i, h)] = np.zeros(300)
+            pltt[(i, h)] = np.zeros((300, 1))
 
-            fuelcost[(i, h)] = np.zeros(300)
-
-
-
-            for k in range(300):
+            fuelcost[(i, h)] = np.zeros((300, 1))
 
 
 
-                current_time = k + 900
+            for k in range(60):
+
+
+
+                current_time = k + 360
 
 
 
@@ -2072,7 +2092,7 @@ def comassignment(
 
 
 
-        po = int(np.floor(agent[i, 1]) - 899)
+        po = int(np.floor(agent[i, 1]) - 359)
 
         po = max(1, min(po, 300))
 
@@ -2198,9 +2218,15 @@ def comassignment(
 
 
 
+                        # MATLAB weights() is 1-based; user preference IDs are 1-based
+
+                        uid = int(user[i, 1]) - 1
+
+
+
                         ojvalue = np.sum(
 
-                            bscale * weights[int(user[i, 1]), :5]
+                            bscale * weights[uid, :5]
 
                         )
 
@@ -2218,9 +2244,13 @@ def comassignment(
 
 
 
+                        uid = int(user[i, 1]) - 1
+
+
+
                         ojvalue = np.sum(
 
-                            bscale * weights[int(user[i, 1]), :5]
+                            bscale * weights[uid, :5]
 
                         )
 
@@ -2358,13 +2388,11 @@ def comassignment(
 
             tt,
 
-            inform,
+            b,
 
-            check,
+            p_agent,
 
-            pre_choice,
-
-            pre_position
+            pre_choice
 
         ) = comrealtimeassignment(
 
@@ -2410,8 +2438,6 @@ def comassignment(
 
             final_pre_choice = np.asarray(pre_choice)
 
-            final_pre_position = np.asarray(pre_position)
-
 
 
             x = 0
@@ -2445,14 +2471,6 @@ def comassignment(
             final_pre_choice = np.concatenate(
 
                 [final_pre_choice, np.asarray(pre_choice)]
-
-            )
-
-
-
-            final_pre_position = np.concatenate(
-
-                [final_pre_position, np.asarray(pre_position)]
 
             )
 
@@ -2594,8 +2612,6 @@ def comassignment(
 
         b,
 
-        final_pre_choice,
-
-        final_pre_position
+        final_pre_choice
 
     )

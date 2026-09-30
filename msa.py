@@ -302,7 +302,7 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     temp_tdlink = pd.read_csv('DTALite_Files/Each iteration.csv')
 
-    num_tdlink_rows = len(temp_tdlink) - 1
+    num_tdlink_rows = len(temp_tdlink)
 
 
 
@@ -414,7 +414,7 @@ def msa(bigloop, p, p_fix, p_realtime):
 
         sheet_name='weights',
 
-        usecols = 'J',
+        usecols = 'J:O',
 
         skiprows = 5
 
@@ -482,9 +482,6 @@ def msa(bigloop, p, p_fix, p_realtime):
 
 
 
-    rposition = []
-
-
 
     cc = np.zeros(25)
 
@@ -500,7 +497,7 @@ def msa(bigloop, p, p_fix, p_realtime):
 
 
 
-    for itr in range(1, 3):
+    for itr in range(1, 19):
 
         print(f"Iteration {itr}")
 
@@ -512,11 +509,11 @@ def msa(bigloop, p, p_fix, p_realtime):
 
             choice,
 
-            rposition,
+            final_rposition,
 
             nchoice,
 
-            rposition,
+            pre_rposition,
 
             ttt
 
@@ -556,9 +553,15 @@ def msa(bigloop, p, p_fix, p_realtime):
 
 
 
+        # bprime columns: 0 = OD index, 1 = route index (both transposed
+        # convention), 2 = departure time, 3 = origin, 4 = destination.
+        # MATLAB's bprime(:,1) is the route index; here the route lives in
+        # column 1 because the transposed choiceset swaps the two indices.
         bprime = np.column_stack([
 
             choice,
+
+            final_rposition,
 
             a[:,0],
 
@@ -570,13 +573,11 @@ def msa(bigloop, p, p_fix, p_realtime):
 
 
 
-        # choiceset has shape:
-
-        #     choiceset[route_number, od_column]
+        # choiceset has shape [od_index, route_index] (transposed).
 
 
 
-        n_routes, n_od_columns = choiceset.shape
+        n_od, n_routes = choiceset.shape
 
 
 
@@ -703,110 +704,67 @@ def msa(bigloop, p, p_fix, p_realtime):
 
 
         # =====================================================
-
         # Build rprime for every OD column
-
+        # (MATLAB: rprime{i,h}(j,itr) -- demand on route i of OD h
+        #  in period j. Keys here are 0-based (route, od, period, itr).)
         # =====================================================
 
+        for od_idx in range(n_od):
 
-
-        for h in range(n_od_columns):
-
-
-
-            # Find the first valid route in OD column h.
-
-            # Every route in the same OD column should have the same
-
+            # Find the first valid route in this OD column.
+            # Every route in the same OD column has the same
             # origin and destination.
-
             nodes = None
 
-
-
-            for route_index in range(n_routes):
-
-
+            for route_idx in range(n_routes):
 
                 _, candidate_nodes = normalize_route_path(
-
-                    choiceset[route_index, h]
-
+                    choiceset[od_idx, route_idx]
                 )
 
-
-
                 if candidate_nodes is not None:
-
                     nodes = candidate_nodes
-
                     break
 
-
-
             # This OD column has no valid paths.
-
             if nodes is None:
-
                 continue
 
-
-
             origin = float(nodes[0])
-
             destination = float(nodes[-1])
 
+            for route_idx in range(n_routes):
 
-
-            for route_num in np.unique(choice):
-
-
-
-                route_num = int(route_num)
-
-
-
-                # Skip invalid route numbers.
-
-                if route_num < 0 or route_num >= n_routes:
-
+                # Skip OD/route cells with no valid path so that
+                # unchosen-but-valid routes still get a zero count.
+                _, route_nodes = normalize_route_path(
+                    choiceset[od_idx, route_idx]
+                )
+                if route_nodes is None:
                     continue
-
-
 
                 for interval in range(60):
 
-
+                    # MATLAB: j = 1..60, period = j + 359.
+                    period = interval + 360
 
                     idx = np.where(
-
-                        (bprime[:, 1] == interval + 359)
-
-                        & (bprime[:, 2] == origin)
-
-                        & (bprime[:, 3] == destination)
-
-                        & (bprime[:, 0] == route_num)
-
+                        (bprime[:, 2] == period)
+                        & (bprime[:, 3] == origin)
+                        & (bprime[:, 4] == destination)
+                        & (bprime[:, 0] == od_idx)
+                        & (bprime[:, 1] == route_idx)
                     )[0]
 
-
-
                     rprime[
-
                         (
-
-                            route_num,
-
-                            h,
-
+                            route_idx,
+                            od_idx,
                             interval,
-
                             itr
-
                         )
-
                     ] = len(idx)
+
 
 
 
@@ -822,25 +780,18 @@ def msa(bigloop, p, p_fix, p_realtime):
 
         for j in range(dsize):
 
+            # choice / final_rposition are the post-realtime OD and route
+            # indices (transposed choiceset: [od_index, route_index]).
 
+            od_index = int(choice[j])
 
-            # nchoice stores the route-row index.
-
-            route_index = int(nchoice[j])
-
-
-
-            # rposition stores the OD-column index.
-
-            od_column = int(rposition[j])
-
-
+            route_index = int(final_rposition[j])
 
             if not (
 
-                0 <= route_index < n_routes
+                0 <= od_index < n_od
 
-                and 0 <= od_column < n_od_columns
+                and 0 <= route_index < n_routes
 
             ):
 
@@ -848,23 +799,19 @@ def msa(bigloop, p, p_fix, p_realtime):
 
                     "Invalid choiceset indices for agent "
 
-                    f"{j}: route_index={route_index}, "
+                    f"{j}: od_index={od_index}, "
 
-                    f"od_column={od_column}, "
+                    f"route_index={route_index}, "
 
                     f"choiceset shape={choiceset.shape}"
 
                 )
 
-
-
             selected_path, nodes = normalize_route_path(
 
-                choiceset[route_index, od_column]
+                choiceset[od_index, route_index]
 
             )
-
-
 
             if selected_path is None:
 
@@ -874,13 +821,13 @@ def msa(bigloop, p, p_fix, p_realtime):
 
                     f"path for agent {j}. "
 
-                    f"route_index={route_index}, "
+                    f"od_index={od_index}, "
 
-                    f"od_column={od_column}, "
+                    f"route_index={route_index}, "
 
                     f"raw value="
 
-                    f"{choiceset[route_index, od_column]!r}"
+                    f"{choiceset[od_index, route_index]!r}"
 
                 )
 
@@ -1124,9 +1071,7 @@ def msa(bigloop, p, p_fix, p_realtime):
 
         com_inform,
 
-        pre_choice,
-
-        pre_position
+        pre_choice
 
     ) = comassignment(
 
@@ -1232,9 +1177,11 @@ def msa(bigloop, p, p_fix, p_realtime):
 
             'linkV': np.array(linkV, dtype = object),
 
-            'choice': pre_choice,
+            'choice': com_choice,
 
-            'position': pre_position
+            'position': com_rposition,
+
+            'pre_choice': pre_choice
 
         }
 

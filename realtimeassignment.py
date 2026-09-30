@@ -3,6 +3,45 @@ import pandas as pd
 from scipy.io import savemat
 from traveltimecal import traveltimecal, traveltimecal_fast, traveltimecal_fastv2
 
+def _normalize_nodes(path):
+    """Return the node tuple for a choiceset/output path string, or None."""
+    if path is None:
+        return None
+    if isinstance(path, np.ndarray):
+        if path.size == 0:
+            return None
+        if path.size == 1:
+            path = path.item()
+        else:
+            return None
+    try:
+        if pd.isna(path):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if not isinstance(path, str):
+        return None
+    try:
+        nodes = tuple(
+            int(float(part.strip()))
+            for part in path.split(";")
+            if part.strip()
+        )
+    except (TypeError, ValueError):
+        return None
+    if len(nodes) < 2:
+        return None
+    return nodes
+
+
+def _dict_to_dense(d, shape):
+    """Convert a {(od, route): value} dict to a dense ndarray (NaN = missing)."""
+    arr = np.full(shape, np.nan)
+    for (od_idx, route_idx), value in d.items():
+        arr[od_idx, route_idx] = value
+    return arr
+
+
 def comrealtimeassignment(
     itr,
     choiceset,
@@ -19,369 +58,278 @@ def comrealtimeassignment(
     dsize,
     num_tdlink_rows,
 ):
+    """Real-time route choice for the combined assignment.
+
+    Faithful port of MATLAB ``comrealtimeassignment.m``. Returns six values
+    ``(rtchoice, updaterposition, tt, b, p_agent, pre_choice)``, matching
+    MATLAB's return list.
+
+    This port keeps the transposed choiceset convention used throughout the
+    Python code (first index = OD index, second index = route index), so
+    ``rtchoice`` holds OD indices and ``updaterposition`` holds route
+    indices -- the names are swapped relative to MATLAB but every consumer
+    (``comassignment``'s ``choiceset[final_choice, final_rposition]`` lookup)
+    is consistent with it.
+
+    Realtime agents run a pairwise utility tournament over route-attribute
+    differences (no intercept: "real weights don't have intercept").
+    ``pre_choice`` independently tracks the minimum-travel-time route.
+    Non-realtime agents keep their ``nchoice`` / ``rposition`` values.
+    """
 
     onlylike0 = []
     onlylike1 = []
 
+    choiceset = np.asarray(choiceset, dtype=object)
+    routelocation = np.asarray(routelocation)
+    n_od_rows, n_route_cols = choiceset.shape
+
     # --------------------------------------------------
-    # Read agent information
+    # Agent tables (MATLAB: input_agent_initial.csv / output_agent.csv)
     # --------------------------------------------------
     S = pd.read_csv("DTALite_Files/input_agent_initial.csv")
+    agent_id_all = S.iloc[:, 0].to_numpy()
+    agent_dep_all = pd.to_numeric(
+        S.iloc[:, 6], errors="coerce"
+    ).to_numpy(dtype=float)
+    agent_od_all = S.iloc[:, [4, 5]].to_numpy(dtype=float)
 
-    agent = np.zeros((len(S), 2))
-    agent[:, 0] = S.iloc[:, 0]
-    agent[:, 1] = S.iloc[:, 6]
-
-    agentOD = np.zeros((len(S), 2))
-    agentOD[:, 0] = S.iloc[:, 4]
-    agentOD[:, 1] = S.iloc[:, 5]
-
+    # Observed travel times from the previous DTALite run, row-aligned with
+    # the input table (DTALite preserves input row order).
+    out_tt = None
+    out_path_nodes = None
+    in_dep = None
     if itr != 1:
         T = pd.read_csv("DTALite_Files/output_agent.csv")
-
-        agent_tt = T.iloc[:, 12].to_numpy()
-        agentpath = T.iloc[:, 29].astype(str).tolist()
-
-    # --------------------------------------------------
-    # Read TD link information
-    # --------------------------------------------------
-    if itr == 1:
-        td_df = pd.read_csv(
-            "DTALite_Files/Each iteration.csv",
-            usecols=[0, 1, 4, 5]
+        n_rows = min(len(S), len(T))
+        # MATLAB: agent_tt = T{:,13} (travel time), agentpath = T{:,30}.
+        out_tt = pd.to_numeric(
+            T.iloc[:n_rows, 12], errors="coerce"
+        ).to_numpy(dtype=float)
+        out_paths = T.iloc[:n_rows, 29].astype(object).to_numpy()
+        out_path_nodes = np.array(
+            [_normalize_nodes(p) for p in out_paths], dtype=object
         )
-    else:
-        td_df = pd.read_csv(
-            "DTALite_Files/output_linkTDMOE.csv",
-            usecols=[0, 1, 4, 5]
-        )
-
-    TDlink = td_df.to_numpy()
-
-    b = TDlink[:, 0]
+        in_dep = agent_dep_all[:n_rows]
 
     # --------------------------------------------------
-    # Build TD link hash map
+    # TD-link table
+    # (MATLAB: 'Each iteration.csv' on itr==1 else 'output_linkTDMOE.csv')
     # --------------------------------------------------
-    print("  Building TDlink hash map...")
-
-    tdlink_map = {}
-
-    for row in TDlink:
-        key = f"{int(row[2])}_{int(row[0])}_{int(row[1])}"
-        tdlink_map[key] = row[3]
-
-    print(f"  ✓ Hash map with {len(tdlink_map)} entries")
+    td_file = (
+        "DTALite_Files/Each iteration.csv"
+        if itr == 1
+        else "DTALite_Files/output_linkTDMOE.csv"
+    )
+    TDlink = pd.read_csv(
+        td_file, usecols=[0, 1, 4, 5], nrows=num_tdlink_rows
+    ).to_numpy(dtype=float)
+    b = TDlink[:, 0].copy()
 
     # --------------------------------------------------
-    # Route attributes
+    # Link table (MATLAB: xlsread('SiouxFalls_net',1,'B90:E165'))
     # --------------------------------------------------
-    gas = 3.0
-    links = pd.read_csv('DTALite_Files/input_link.csv')
-    
-    length_data = links[['from_node_id', 'to_node_id', 'length']].to_numpy()
+    length = pd.read_excel(
+        "DTALite_Files/SiouxFalls_net.xlsx", sheet_name=0,
+        usecols="B:E", skiprows=89, nrows=76, header=None,
+    ).to_numpy(dtype=float)
 
-    n_routes = len(choiceset)
-    n_ods = len(choiceset[0])
+    link_len = {}
+    for row in length:
+        if np.all(np.isfinite(row[:4])):
+            link_len[(int(row[0]), int(row[1]))] = float(row[2])
 
-    len_mat = np.zeros((n_routes, n_ods))
-    nc = np.zeros((n_routes, n_ods))
+    # --------------------------------------------------
+    # Route attributes: len (distance) and nc (link count)
+    # --------------------------------------------------
+    len_mat = np.zeros((n_od_rows, n_route_cols))
+    nc = np.zeros((n_od_rows, n_route_cols))
+    path_nodes = np.empty((n_od_rows, n_route_cols), dtype=object)
+    path_nodes.fill(None)
 
-    for h in range(n_ods):
-
-        for i in range(n_routes):
-
-            path = choiceset[i, h]
-
-            if not path:
+    for od_idx in range(n_od_rows):
+        for route_idx in range(n_route_cols):
+            nodes = _normalize_nodes(choiceset[od_idx, route_idx])
+            if nodes is None:
                 continue
+            path_nodes[od_idx, route_idx] = nodes
+            total = 0.0
+            for a, bb in zip(nodes[:-1], nodes[1:]):
+                total += link_len.get((a, bb), 0.0)
+            len_mat[od_idx, route_idx] = total
+            nc[od_idx, route_idx] = len(nodes) - 1
 
-            nodes = [
-                int(x)
-                for x in path.split(";")
-                if x.strip() != ""
-            ]
+    gas = 3.0
 
-            for j in range(len(nodes) - 1):
-
-                mask = (
-                    (length_data[:, 0] == nodes[j])
-                    &
-                    (length_data[:, 1] == nodes[j + 1])
-                )
-
-                idx = np.where(mask)[0]
-
-                if len(idx) > 0:
-                    len_mat[i, h] += length_data[idx[0], 2]
-
-            nc[i, h] = len(nodes) - 1
-
-    gas = 3
+    # Single time step, like MATLAB's `for k=itr*phlength:itr*phlength`.
+    period_key = int(itr * phlength)
+    timestamp = period_key + 359
 
     # --------------------------------------------------
-    # Travel time calculation
+    # Route travel time / planning time / fuel cost
     # --------------------------------------------------
     tt = {}
     pltt = {}
     fuelcost = {}
 
-    for h in range(n_ods):
-
-        for i in range(n_routes):
-
-            path = choiceset[i, h]
-
-            if not path:
+    for od_idx in range(n_od_rows):
+        for route_idx in range(n_route_cols):
+            nodes = path_nodes[od_idx, route_idx]
+            if nodes is None:
                 continue
+            path = choiceset[od_idx, route_idx]
 
-            m = 1
+            observed = None
+            if itr != 1:
+                # MATLAB: agents on this exact path departing at
+                # floor(departure) == (k+359); tt = mean, pltt = max.
+                on_path = np.array(
+                    [
+                        pn is not None and pn == nodes
+                        for pn in out_path_nodes
+                    ]
+                )
+                dep_match = np.floor(in_dep[on_path]) == timestamp
+                vals = out_tt[on_path][dep_match]
+                vals = vals[np.isfinite(vals)]
+                if vals.size:
+                    observed = vals
 
-            if itr == 1:
-
-                m = 2
-
+            if observed is None:
+                tt_val, fc_val = traveltimecal_fastv2(
+                    timestamp, TDlink, path, length, gas, itr, 0
+                )
+                tt[(od_idx, route_idx)] = tt_val
+                pltt[(od_idx, route_idx)] = tt_val
+                fuelcost[(od_idx, route_idx)] = fc_val
             else:
-
-                findagent = [
-                    idx
-                    for idx, p in enumerate(agentpath)
-                    if p == path
-                ]
-
-                agentn = []
-
-                for fa in findagent:
-
-                    agentn.append([
-                        agent[fa, 0],
-                        agent[fa, 1],
-                        agent_tt[fa]
-                    ])
-
-                agentn = np.array(agentn)
-
-                m = len(agentn) + 1
-
-            for k in [itr * phlength]:
-
-                if m == 1:
-
-                    tt_val, fc_val = traveltimecal_fastv2(
-                        k + 899,
-                        TDlink,
-                        path,
-                        length_data,
-                        gas,
-                        itr,
-                        0,
-                    )
-
-                    tt[(i, h, k)] = tt_val
-                    fuelcost[(i, h, k)] = fc_val
-                    pltt[(i, h, k)] = tt_val
-
-                else:
-
-                    if itr == 1:
-                        ttloc = []
-                    else:
-
-                        ttloc = np.where(
-                            np.floor(agentn[:, 1]) == (k + 899)
-                        )[0]
-
-                    if len(ttloc) == 0:
-
-                        tt_val, fc_val = traveltimecal_fastv2(
-                            k + 899,
-                            TDlink,
-                            path,
-                            length_data,
-                            gas,
-                            itr,
-                            0,
-                        )
-
-                        tt[(i, h, k)] = tt_val
-                        fuelcost[(i, h, k)] = fc_val
-                        pltt[(i, h, k)] = tt_val
-
-                    else:
-
-                        a = agentn[ttloc, 2]
-
-                        tt[(i, h, k)] = np.mean(a)
-                        pltt[(i, h, k)] = np.max(a)
-
-                        _, fc_val = traveltimecal_fastv2(
-                            k + 899,
-                            TDlink,
-                            path,
-                            length_data,
-                            gas,
-                            itr,
-                            0,
-                        )
-
-                        fuelcost[(i, h, k)] = fc_val
+                tt[(od_idx, route_idx)] = float(np.mean(observed))
+                pltt[(od_idx, route_idx)] = float(np.max(observed))
+                _, fc_val = traveltimecal_fastv2(
+                    timestamp, TDlink, path, length, gas, itr, 0
+                )
+                fuelcost[(od_idx, route_idx)] = fc_val
 
     # --------------------------------------------------
-    # Agents departing in current assignment period
+    # Agents departing in this phase
+    # (MATLAB: (360+phlength*(itr-1), 360+phlength*itr])
     # --------------------------------------------------
-    p_agent = agent[
-        (agent[:, 1] <= (360 + phlength * itr))
-        &
-        (agent[:, 1] > (360 + phlength * (itr - 1)))
-    ]
+    period_mask = (
+        (agent_dep_all > 360.0 + phlength * (itr - 1))
+        & (agent_dep_all <= 360.0 + phlength * itr)
+    )
+    p_idx = np.where(period_mask)[0]
+    p_agent = np.column_stack([agent_id_all[p_idx], agent_dep_all[p_idx]])
 
-    rtchoice = np.zeros(len(p_agent), dtype=int)
-    updaterposition = np.zeros(len(p_agent), dtype=int)
-    pre_choice = np.zeros(len(p_agent), dtype=int)
-    pre_position = np.zeros(len(p_agent), dtype = int)
+    rtchoice = np.zeros(len(p_idx), dtype=int)
+    updaterposition = np.zeros(len(p_idx), dtype=int)
+    pre_choice = np.zeros(len(p_idx), dtype=int)
 
-    # --------------------------------------------------
-    # Route choice
-    # --------------------------------------------------
-    for i in range(len(p_agent)):
+    realtime_set = set(int(x) for x in np.asarray(realtime_user).ravel())
+    nchoice_arr = np.asarray(nchoice).reshape(-1)
+    rposition_arr = np.asarray(rposition).reshape(-1)
 
-        agent_id = int(p_agent[i, 0])
+    for row, s_row in enumerate(p_idx):
+        agent_id = int(agent_id_all[s_row])
 
-        agent_id = int(p_agent[i,0])
-
-        rtchoice[i] = int(nchoice[agent_id])
-        updaterposition[i] = int(rposition[agent_id])
-
-        if agent_id not in realtime_user:
+        if agent_id not in realtime_set:
+            rtchoice[row] = int(nchoice_arr[agent_id])
+            updaterposition[row] = int(rposition_arr[agent_id])
             continue
 
-        ff = np.where(
-            (routelocation[:, 0] == agentOD[i, 0])
-            &
-            (routelocation[:, 1] == agentOD[i, 1])
+        matches = np.where(
+            (routelocation[:, 0] == agent_od_all[s_row, 0])
+            & (routelocation[:, 1] == agent_od_all[s_row, 1])
         )[0]
-
-        po = int(np.floor(agent[i, 1]) - 899)
-        po = max(1, min(po, 300))
-        po -= 1
-
-        available = []
-
-        for idx in ff:
-            route_row = int(routelocation[idx, 4])
-            route_col = int(routelocation[idx, 3])
-
-            if (route_row, route_col) in tt:
-                available.append((route_row, route_col))
-
-        if len(available) == 0:
+        if len(matches) == 0:
             continue
 
-        best_row, best_col = available[0]
+        # OD index (first dim of the transposed choiceset).
+        f = int(routelocation[matches[0], 4])
 
-        b1 = np.array([
-            len_mat[best_row, best_col],
-            float(tt[(best_row, best_col, po)]),
-            float(pltt[(best_row, best_col, po)]),
-            float(fuelcost[(best_row, best_col, po)]),
-            nc[best_row, best_col]
-        ])
+        # Route indices available for this OD, ascending (MATLAB j = 1..).
+        route_ids = sorted(
+            {
+                int(routelocation[m, 3])
+                for m in matches
+                if _normalize_nodes(
+                    choiceset[f, int(routelocation[m, 3])]
+                )
+                is not None
+            }
+        )
+        if not route_ids:
+            continue
 
+        def attrs(r):
+            return np.array(
+                [
+                    len_mat[f, r],
+                    tt[(f, r)],
+                    pltt[(f, r)],
+                    fuelcost[(f, r)],
+                    nc[f, r],
+                ]
+            )
+
+        # The agent's own preference row (MATLAB 1-based IDs).
+        pref = int(user[agent_id, 1])
+        wrow = weights[pref - 1, :5]
+        dataset2 = pref >= 16650
+
+        b1 = attrs(route_ids[0])
         pre_b1 = b1.copy()
-        pre_route = best_row.copy()
-        pre_col = best_col.copy()
+        croute = route_ids[0]
+        pre_croute = route_ids[0]
 
-        for route_row, route_col in available:
-            if (
-                choiceset[route_row, route_col] is None or
-                choiceset[route_row, route_col] == ""
-            ):
-                continue
+        for r in route_ids[1:]:
+            b0 = attrs(r)
+            diff = b1 - b0
 
-            b0 = np.array([
-
-                len_mat[route_row, route_col],
-                float(tt[(route_row, route_col, po)]),
-                float(pltt[(route_row, route_col, po)]),
-                float(fuelcost[(route_row, route_col, po)]),
-                nc[route_row, route_col]
-            ])
-
-            pre_b0 = b0.copy()
-
-            b = b1 - b0
-
-            if i in onlylike1:
+            if (row + 1) in onlylike1:
                 choice = 0
-
-            elif i in onlylike0:
+            elif (row + 1) in onlylike0:
                 choice = 1
-
             else:
-
-                if user[i, 1] < 16650:
-
-                    bscale = b.copy()
-
-                    ojvalue = np.sum(
-                        bscale * weights[int(user[i, 1]), :5]
-                    )
-
+                if dataset2:
+                    bscale = (diff - meanstd2[0, :]) / meanstd2[1, :]
                 else:
+                    bscale = diff
+                # No intercept: "real weights don't have intercept".
+                ojvalue = float(np.sum(bscale * wrow))
 
-                    bscale = (
-                        b - meanstd2[0, :]
-                    ) / meanstd2[1, :]
-
-                    ojvalue = np.sum(
-                        bscale * weights[int(user[i, 1]), :5]
-                    )
-
-                if abs(ojvalue - 1) > abs(ojvalue + 1):
-                    choice = 0
-                else:
-                    choice = 1
+                choice = 0 if abs(ojvalue - 1) > abs(ojvalue + 1) else 1
 
             if choice != 1:
                 b1 = b0
-                best_row = route_row
-                best_col = route_col
+                croute = r
 
-            if pre_b1[1] >= pre_b0[1]:
-                pre_b1 = pre_b0
-                pre_route = route_row
-                pre_col = route_col
+            # Parallel minimum-travel-time tournament.
+            if not pre_b1[1] < b0[1]:
+                pre_croute = r
+                pre_b1 = b0
 
-        rtchoice[i] = best_row
-        updaterposition[i] = best_col
-        pre_choice[i] = pre_route
-        pre_position[i] = pre_col
+        rtchoice[row] = f
+        updaterposition[row] = croute
+        pre_choice[row] = pre_croute
 
-    # --------------------------------------------------
-    # Save final iteration route information
-    # --------------------------------------------------
-    if itr == int(np.floor(60 / phlength)):
-
+    if itr == int(np.floor(60.0 / phlength)):
         savemat(
             f"DTALite_Files/pathinfo_comrealass{bigloop}.mat",
             {
                 "len": len_mat,
-                "tt": tt,
-                "pltt": pltt,
-                "fuelcost": fuelcost,
+                "tt": _dict_to_dense(tt, (n_od_rows, n_route_cols)),
+                "pltt": _dict_to_dense(pltt, (n_od_rows, n_route_cols)),
+                "fuelcost": _dict_to_dense(
+                    fuelcost, (n_od_rows, n_route_cols)
+                ),
                 "nc": nc,
             },
         )
 
-    return (
-        rtchoice,
-        updaterposition,
-        tt,
-        b,
-        p_agent,
-        pre_choice,
-        pre_position
-    )
+    return rtchoice, updaterposition, tt, b, p_agent, pre_choice
+
+
 
 
 def realtimeassignment_fast(
@@ -595,7 +543,7 @@ def realtimeassignment_fast(
 
     n_routes, n_ods = choiceset.shape
     period_key = int(itr * phlength)
-    td_departure_time = period_key + 899
+    td_departure_time = period_key + 359
     gas = 3.0
 
     # ---------------------------------------------------------
@@ -983,7 +931,7 @@ def realtimeassignment_fast(
             (routelocation[:,1] == destination) 
         )[0]
 
-        if len(matches == 0):
+        if len(matches) == 0:
             continue
 
         best_row = -1
