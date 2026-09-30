@@ -23,6 +23,25 @@ from realtimeassignment import comrealtimeassignment, realtimeassignment_fast
 import time
 
 
+# ---------------------------------------------------------------------------
+# DTALite executable
+# ---------------------------------------------------------------------------
+# DTALite.exe is a Windows binary. On Linux (e.g. UVA Rivanna) it is launched
+# under Wine instead: ``wine DTALite.exe`` with cwd='DTALite_Files'.
+# Requirements on Linux: the ``wine`` command on PATH, and ``mfc140.dll``
+# sitting next to DTALite.exe inside DTALite_Files/.
+# Note the bare exe name on Linux: with cwd='DTALite_Files' the child process
+# resolves it *after* chdir, whereas Windows resolves the 'DTALite_Files/...'
+# path against the parent directory.
+import platform as _platform
+
+if _platform.system() == 'Windows':
+    DTALITE_CMD = ['DTALite_Files/DTALite.exe']
+else:
+    DTALITE_CMD = ['wine', 'DTALite.exe']
+
+
+
 
 def sanitize_dtalite_csv(path):
 
@@ -824,7 +843,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         subprocess.run(
 
-            ['DTALite_Files/DTALite.exe'], cwd = 'DTALite_Files', check = True
+            DTALITE_CMD, cwd = 'DTALite_Files', check = True
 
         )
 
@@ -1206,11 +1225,11 @@ def fixedcomassignment(
 
 
 
-            tt[(i, h)] = np.zeros(300)
+            tt[(i, h)] = np.zeros((300, 1))
 
-            pltt[(i, h)] = np.zeros(300)
+            pltt[(i, h)] = np.zeros((300, 1))
 
-            fuelcost[(i, h)] = np.zeros(300)
+            fuelcost[(i, h)] = np.zeros((300, 1))
 
 
 
@@ -1908,11 +1927,11 @@ def comassignment(
 
 
 
-            tt[(i, h)] = np.zeros(300)
+            tt[(i, h)] = np.zeros((300, 1))
 
-            pltt[(i, h)] = np.zeros(300)
+            pltt[(i, h)] = np.zeros((300, 1))
 
-            fuelcost[(i, h)] = np.zeros(300)
+            fuelcost[(i, h)] = np.zeros((300, 1))
 
 
 
@@ -2574,7 +2593,7 @@ def comassignment(
 
         subprocess.run(
 
-            [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
+            DTALITE_CMD, cwd = 'DTALite_Files', check = True
 
         )
 

@@ -1,0 +1,39 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%labels
+    Author "Eli"
+    Description "DTALite 1.1.0 (Windows) under Wine + Python MSA pipeline for UVA Rivanna"
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    # wine: runs DTALite.exe (64-bit). wine64: 64-bit loader.
+    # python3 + scientific stack for assignment.py / msa.py / runner_parallel.py
+    apt-get install -y --no-install-recommends \
+        wine wine64 \
+        python3 python3-pip
+    pip3 install --no-cache-dir numpy pandas scipy networkx
+    rm -rf /var/lib/apt/lists/* /root/.cache
+
+%environment
+    # Keep Wine quiet; force 64-bit prefix behavior
+    export WINEDEBUG=-all
+    export WINEARCH=win64
+    # NOTE: set WINEPREFIX at job time to a fast writable dir, e.g.
+    #   export WINEPREFIX=$TMPDIR/wineprefix
+
+%runscript
+    # Default: run Python. Example:
+    #   apptainer exec dtalite-wine.sif python3 runner_parallel.py --iterations 10 --workers 8
+    exec python3 "$@"
+
+%help
+    Runs the DTALite PhD pipeline (parallel_msa / runner_parallel) on Linux
+    by executing DTALite.exe under Wine.
+
+    Required alongside your project files:
+      - DTALite_Files/DTALite.exe  (your Windows binary)
+      - DTALite_Files/mfc140.dll   (64-bit MFC runtime, ships beside the exe)
+
+    The Python code auto-detects Linux and invokes `wine DTALite.exe`.
