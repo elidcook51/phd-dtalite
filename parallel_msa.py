@@ -216,7 +216,8 @@ def _sandbox_cwd(run_dir):
 # ---------------------------------------------------------------------------
 
 def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
-                 repo_root=None, keep_on_failure=True, cleanup=True):
+                 repo_root=None, keep_on_failure=True, cleanup=True,
+                 msa_fn=None):
     """
     Parallel-safe version of ``msa.msa``.
 
@@ -233,6 +234,11 @@ def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
         disk for inspection instead of deleting it.
     cleanup : if False, the sandbox is left on disk even on success (used
         by ``run_parallel_msa`` to harvest shared result files afterwards).
+    msa_fn : optional ``(bigloop, p, p_fix, p_realtime)`` callable used
+        instead of ``msa.msa``.  Testing hook: on Windows (spawn start
+        method) monkeypatching ``msa.msa`` does not propagate into worker
+        processes, so pass the fake explicitly.  Must be a top-level
+        function to survive pickling to the workers.
     """
     run_id = bigloop if run_id is None else run_id
     repo_root = os.path.abspath(repo_root or os.getcwd())
@@ -246,7 +252,8 @@ def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
                 os.path.join(SOURCE_DIR, "input_agent_initial.csv"),
                 os.path.join(SOURCE_DIR, "input_agent.csv"),
             )
-            _msa_mod.msa(bigloop, p, p_fix, p_realtime)
+            (msa_fn if msa_fn is not None else _msa_mod.msa)(
+                bigloop, p, p_fix, p_realtime)
 
         copied = collect_results(run_dir, bigloop, dest_dir=dest_dir)
     except Exception:
@@ -386,7 +393,7 @@ def _msa_worker(task):
 
 
 def run_parallel_msa(schedule, max_workers=None, repo_root=None,
-                     keep_on_failure=True):
+                     keep_on_failure=True, msa_fn=None):
     """
     Run many MSA iterations concurrently, one sandbox (``RunX/``) per
     iteration.
@@ -400,6 +407,9 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
         copy of ``DTALite.exe``, so size this to your CPU/RAM.
     repo_root : repo root containing ``DTALite_Files/``; defaults to cwd.
     keep_on_failure : keep failed runs' ``RunX/`` folders for inspection.
+    msa_fn : optional ``(bigloop, p, p_fix, p_realtime)`` callable used
+        instead of ``msa.msa`` in every worker (testing hook; must be a
+        top-level function to survive pickling).
 
     Returns
     -------
@@ -427,6 +437,7 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
             "repo_root": repo_root,
             "keep_on_failure": keep_on_failure,
             "cleanup": False,  # orchestrator harvests shared files first
+            "msa_fn": msa_fn,
         }
         for (bigloop, p, p_fix, p_realtime) in schedule
     ]
