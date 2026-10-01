@@ -494,6 +494,7 @@ def msa(bigloop, p, p_fix, p_realtime):
 
 
     prev_choice = None
+    prev_rposition = None
 
 
 
@@ -877,11 +878,18 @@ def msa(bigloop, p, p_fix, p_realtime):
 
         if itr > 1:
 
-            cc[itr - 1] = np.sum(choice != prev_choice)
+            # MATLAB counts agents whose *route* changed (msa.m cc block).
+
+            # Under the transposed choiceset, `choice` holds the OD index
+
+            # (never changes per agent); the route index is final_rposition.
+
+            cc[itr - 1] = np.sum(final_rposition != prev_rposition)
 
 
 
         prev_choice = np.array(choice)
+        prev_rposition = np.array(final_rposition)
 
 
 

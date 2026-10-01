@@ -384,6 +384,62 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
+            # Observed travel-time branch (MATLAB assignment.m lines 117-170).
+
+            # For itr > 1, use the observed mean/max travel times from the
+
+            # previous DTALite run (output_agent.csv) for agents that used
+
+            # this route at this departure minute; otherwise compute from
+
+            # the link tables. (Mirrors fixedcomassignment()/comassignment().)
+
+            m = 1
+
+            agentn = []
+
+
+
+            if itr == 1:
+
+                m = 2
+
+            else:
+
+                findagent = [
+
+                    idx
+
+                    for idx, p in enumerate(agentpath)
+
+                    if p == path
+
+                ]
+
+
+
+                for idx in findagent:
+
+                    agentn.append([
+
+                        agent[idx, 0],
+
+                        agent[idx, 1],
+
+                        agent[idx, 2]
+
+                    ])
+
+
+
+                    m += 1
+
+
+
+                agentn = np.array(agentn)
+
+
+
             tt[(i, col)] = np.zeros(60)
 
             pltt[(i, col)] = np.zeros(60)
@@ -394,35 +450,123 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
             for k in range(60):
 
-                departure_time = k + 360
+                dep_time = k + 360  # MATLAB: (k+359) with k = 1..60
 
 
 
-                travel_time, fuel = traveltimecal_fastv2(
+                if m == 1:
 
-                    departure_time,
+                    # No agent used this route: compute from link tables.
 
-                    TDlink,
+                    tt_val, fc_val = traveltimecal_fastv2(
 
-                    path,
+                        dep_time,
 
-                    link_lengths,
+                        TDlink,
 
-                    gas,
+                        path,
 
-                    itr,
+                        link_lengths,
 
-                    0
+                        gas,
 
-                )
+                        itr,
+
+                        0
+
+                    )
 
 
 
-                tt[(i,col)][k] = travel_time
+                    tt[(i, col)][k] = tt_val
 
-                pltt[(i,col)][k] = travel_time
+                    pltt[(i, col)][k] = tt_val
 
-                fuelcost[(i, col)][k] = fuel
+                    fuelcost[(i, col)][k] = fc_val
+
+                else:
+
+                    if itr == 1:
+
+                        ttloc = []
+
+                    else:
+
+                        ttloc = np.where(
+
+                            np.floor(agentn[:, 1]) == dep_time
+
+                        )[0]
+
+
+
+                    if len(ttloc) == 0:
+
+                        # No agent on this route at this minute: compute.
+
+                        tt_val, fc_val = traveltimecal_fastv2(
+
+                            dep_time,
+
+                            TDlink,
+
+                            path,
+
+                            link_lengths,
+
+                            gas,
+
+                            itr,
+
+                            0
+
+                        )
+
+
+
+                        tt[(i, col)][k] = tt_val
+
+                        pltt[(i, col)][k] = tt_val
+
+                        fuelcost[(i, col)][k] = fc_val
+
+                    else:
+
+                        # Observed times: mean -> tt, max -> pltt.
+
+                        # Fuel is still computed from the link tables.
+
+                        a = agentn[ttloc, 2]
+
+
+
+                        tt[(i, col)][k] = np.mean(a)
+
+                        pltt[(i, col)][k] = np.max(a)
+
+
+
+                        _, fc_val = traveltimecal_fastv2(
+
+                            dep_time,
+
+                            TDlink,
+
+                            path,
+
+                            link_lengths,
+
+                            gas,
+
+                            itr,
+
+                            0
+
+                        )
+
+
+
+                        fuelcost[(i, col)][k] = fc_val
 
 
 

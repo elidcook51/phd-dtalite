@@ -91,6 +91,13 @@ def main():
     # ------------------------------- 3. collect_results / shared / missing
     run_dir = pm.stage_run_dir(998, repo_root=test_root)
     sbox = os.path.join(run_dir, "DTALite_Files")
+    # Hermetic sandbox: drop any shared result files carried over from
+    # real DTALite runs in DTALite_Files/ so the assertion below tests
+    # collect_shared_results logic, not the folder's history.
+    for stale in pm.SHARED_RESULT_NAMES:
+        stale_path = os.path.join(sbox, stale)
+        if os.path.isfile(stale_path):
+            os.remove(stale_path)
     with open(os.path.join(sbox, "998UOinfor_agent.csv"), "w") as f:
         f.write("a")
     with open(os.path.join(sbox, "myfile998.mat"), "w") as f:
