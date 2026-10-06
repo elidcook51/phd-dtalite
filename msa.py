@@ -402,7 +402,9 @@ def msa(bigloop, p, p_fix, p_realtime):
 
         usecols = 'A:F',
 
-        skiprows = 5
+        skiprows = 5,
+
+        header = None
 
     ).values
 
@@ -416,7 +418,9 @@ def msa(bigloop, p, p_fix, p_realtime):
 
         usecols = 'J:O',
 
-        skiprows = 5
+        skiprows = 5,
+
+        header = None
 
     ).values
 
@@ -1009,7 +1013,22 @@ def msa(bigloop, p, p_fix, p_realtime):
 
 
 
-    pd.DataFrame(inputagent, columns = columns).to_csv('DTALite_Files/input_agent.csv')
+    # FIX (parity): write the PREDICTED paths into inputagent before running
+    # DTALite, mirroring MATLAB msa.m lines 236-249 and the actual phase below.
+    # Previously this wrote the stale iteration-18 paths.
+    for j in range(dsize):
+
+
+
+        inputagent[j][11] = choiceset[
+
+            int(pre_choice[j]), int(pre_rposition[j])
+
+        ]
+
+
+
+    pd.DataFrame(inputagent, columns=columns).to_csv('DTALite_Files/input_agent.csv', index = False)
 
 
 

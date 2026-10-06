@@ -574,7 +574,7 @@ def realtimeassignment_fast(
     if itr != 1:
         output_agent_df = pd.read_csv(
             "DTALite_Files/output_agent.csv",
-            usecols=[0, 6, 12, 29],
+            usecols=[0, 9, 12, 29],
         )
 
         output_agent_ids = pd.to_numeric(

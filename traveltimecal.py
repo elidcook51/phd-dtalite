@@ -398,7 +398,7 @@ def traveltimecal_fastv2(timestamp, TDlink, path, length_data, gas, itr, empty):
         traveltimecal_fastv2.path_cache[path]
     )
 
-    cache_key = (int(timestamp), path, empty)
+    cache_key = (float(timestamp), path, empty)
 
     if cache_key in traveltimecal_fastv2.path_result_cache:
         return traveltimecal_fastv2.path_result_cache[cache_key]
