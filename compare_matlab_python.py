@@ -61,8 +61,13 @@ def read_loose_csv(path):
     ncols = len(header)
     fixed = []
     for r in data:
+        # DTALite's trailing-comma quirk: drop trailing *empty* fields only
         while len(r) > ncols and r[-1].strip() == "":
             r = r[:-1]
+        # ...but some writers emit *short* rows; pad those with empties
+        # (compared as NaN/"" downstream, never silently dropped)
+        if len(r) < ncols:
+            r = r + [""] * (ncols - len(r))
         fixed.append(r)
     df = pd.DataFrame(fixed, columns=header)
     # strip whitespace that MATLAB/Python formatting can leave behind
@@ -83,12 +88,17 @@ def looks_like_row_index(col):
 
 
 def coerce_numeric(col):
-    """Return (is_numeric, float ndarray with NaN for empties)."""
-    s = col.replace("", np.nan)
-    v = pd.to_numeric(s, errors="coerce")
+    """Return (is_numeric, float ndarray with NaN for empties).
+
+    Empty/whitespace-only strings become NaN. Built without
+    Series.replace() to avoid pandas' deprecated silent-downcasting path.
+    """
+    vals = [np.nan if isinstance(x, str) and x.strip() == "" else x
+            for x in col.to_numpy()]
+    v = pd.Series(pd.to_numeric(vals, errors="coerce"), index=col.index)
+    n_empty = sum(1 for x in vals if isinstance(x, float) and np.isnan(x))
     # numeric if every non-empty entry converted
-    mask = s.notna()
-    if mask.any() and v[mask].notna().all():
+    if v.notna().sum() == len(vals) - n_empty:
         return True, v.to_numpy(dtype=float)
     return False, None
 
