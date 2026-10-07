@@ -233,8 +233,8 @@ def comrealtimeassignment(
         agent_id = int(agent_id_all[s_row])
 
         if agent_id not in realtime_set:
-            rtchoice[row] = int(nchoice_arr[agent_id - 1])
-            updaterposition[row] = int(rposition_arr[agent_id - 1])
+            rtchoice[row] = int(nchoice_arr[agent_id])
+            updaterposition[row] = int(rposition_arr[agent_id])
             continue
 
         matches = np.where(
@@ -847,18 +847,10 @@ def realtimeassignment_fast(
     period_start = 360.0 + phlength * (itr - 1)
     period_end = 360.0 + phlength * itr
 
-    # FIX (parity): include the lower bound for the first phase so agents
-    # with departure exactly 360.0 are not excluded from all phases.
-    if itr == 1:
-        period_mask = (
-            (agent[:, 1] >= period_start)
-            & (agent[:, 1] <= period_end)
-        )
-    else:
-        period_mask = (
-            (agent[:, 1] > period_start)
-            & (agent[:, 1] <= period_end)
-        )
+    period_mask = (
+        (agent[:, 1] > period_start)
+        & (agent[:, 1] <= period_end)
+    )
 
     p_agent = agent[period_mask]
 
@@ -883,14 +875,14 @@ def realtimeassignment_fast(
         agent_id = int(agent_record[0])
 
         if (
-            1 <= agent_id <= nchoice_array.size
-            and 1 <= agent_id <= rposition_array.size
+            0 <= agent_id < nchoice_array.size
+            and 0 <= agent_id < rposition_array.size
         ):
             rtchoice[period_row] = int(
-                nchoice_array[agent_id - 1]
+                nchoice_array[agent_id]
             )
             updaterposition[period_row] = int(
-                rposition_array[agent_id - 1]
+                rposition_array[agent_id]
             )
 
     # ---------------------------------------------------------
@@ -915,14 +907,14 @@ def realtimeassignment_fast(
         # Preserve the existing route for non-realtime agents.
         if agent_id not in realtime_set:
             if (
-                1 <= agent_id <= nchoice_array.size
-                and 1 <= agent_id <= rposition_array.size
+                0 <= agent_id < nchoice_array.size
+                and 0 <= agent_id < rposition_array.size
             ):
                 rtchoice[period_row] = int(
-                    nchoice_array[agent_id - 1]
+                    nchoice_array[agent_id]
                 )
                 updaterposition[period_row] = int(
-                    rposition_array[agent_id - 1]
+                    rposition_array[agent_id]
                 )
             continue
 

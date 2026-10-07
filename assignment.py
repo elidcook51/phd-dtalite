@@ -610,7 +610,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-        if (i+1) in fix_user:
+        if i in fix_user:
 
 
 
@@ -662,7 +662,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-        if (i+1) in member:
+        if i in member:
 
 
 
@@ -808,7 +808,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-        if (i+1) in realtime_user:
+        if i in realtime_user:
 
 
 
@@ -1474,7 +1474,7 @@ def fixedcomassignment(
 
 
 
-        if (i+1) in fix_user_set:
+        if i in fix_user_set:
 
 
 
@@ -2238,7 +2238,7 @@ def comassignment(
 
 
 
-        if (i+1) in member:
+        if i in member:
 
 
 
