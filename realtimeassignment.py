@@ -97,8 +97,10 @@ def comrealtimeassignment(
     # Observed travel times from the previous DTALite run, row-aligned with
     # the input table (DTALite preserves input row order).
     out_tt = None
-    out_path_nodes = None
-    in_dep = None
+    # Group observed travel times by RAW path string, matching MATLAB
+    # comrealtimeassignment.m:115 exactly: find(strcmp(path,agentpath)).
+    # MATLAB then filters by floor(INPUT departure)==k+359 (line 142).
+    grouped_observations = {}
     if itr != 1:
         T = pd.read_csv("DTALite_Files/output_agent.csv")
         n_rows = min(len(S), len(T))
@@ -107,10 +109,16 @@ def comrealtimeassignment(
             T.iloc[:n_rows, 12], errors="coerce"
         ).to_numpy(dtype=float)
         out_paths = T.iloc[:n_rows, 29].astype(object).to_numpy()
-        out_path_nodes = np.array(
-            [_normalize_nodes(p) for p in out_paths], dtype=object
-        )
         in_dep = agent_dep_all[:n_rows]
+        # Key: raw path string -> list of (input_departure, travel_time)
+        for p_str, tt_val, dep_val in zip(out_paths, out_tt, in_dep):
+            if not np.isfinite(tt_val) or not np.isfinite(dep_val):
+                continue
+            raw = str(p_str).strip() if isinstance(p_str, str) else str(p_str)
+            if not raw:
+                continue
+            grouped_observations.setdefault(raw, []).append(
+                (float(dep_val), float(tt_val)))
 
     # --------------------------------------------------
     # TD-link table
@@ -181,19 +189,16 @@ def comrealtimeassignment(
 
             observed = None
             if itr != 1:
-                # MATLAB: agents on this exact path departing at
+                # MATLAB: agents on this exact (raw string) path departing at
                 # floor(departure) == (k+359); tt = mean, pltt = max.
-                on_path = np.array(
-                    [
-                        pn is not None and pn == nodes
-                        for pn in out_path_nodes
-                    ]
-                )
-                dep_match = np.floor(in_dep[on_path]) == timestamp
-                vals = out_tt[on_path][dep_match]
-                vals = vals[np.isfinite(vals)]
-                if vals.size:
-                    observed = vals
+                cands = grouped_observations.get(str(path).strip())
+                if cands:
+                    vals = np.array([
+                        tt for dep, tt in cands
+                        if np.floor(dep) == timestamp and np.isfinite(tt)
+                    ])
+                    if vals.size:
+                        observed = vals
 
             if observed is None:
                 tt_val, fc_val = traveltimecal_fastv2(
