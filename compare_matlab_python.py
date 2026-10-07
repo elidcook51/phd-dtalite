@@ -107,10 +107,22 @@ def coerce_numeric(col):
 # Comparison
 # ---------------------------------------------------------------------------
 
-def compare_frames(m_df, p_df, name, rtol, atol, out):
-    """Compare two DataFrames. Returns (passed, notes list). Prints details."""
+def compare_frames(m_df, p_df, name, rtol, atol, out, details=None):
+    """Compare two DataFrames. Returns (passed, notes list). Prints details.
+
+    If `details` (a list) is supplied, one dict per mismatching column is
+    appended: {file, col_idx, col_name, col_type, nbad, nrows,
+    max_abs_diff, max_rel_diff, samples:[(row, matlab, python), ...]}.
+    A shape mismatch is recorded as one dict with col_idx=-1.
+    """
     notes = []
     out(f"\n=== {name} ===")
+
+    def _detail(**kw):
+        if details is not None:
+            d = {"file": name}
+            d.update(kw)
+            details.append(d)
 
     # --- index-column artifact: pandas to_csv without index=False adds one
     if m_df.shape[1] != p_df.shape[1]:
@@ -129,6 +141,9 @@ def compare_frames(m_df, p_df, name, rtol, atol, out):
 
     if m_df.shape != p_df.shape:
         out(f"  SHAPE MISMATCH: matlab {m_df.shape} vs python {p_df.shape} -> FAIL")
+        _detail(col_idx=-1, col_name="(shape)", col_type="shape",
+                nbad=-1, nrows=-1, max_abs_diff="", max_rel_diff="",
+                samples=[(-1, str(m_df.shape), str(p_df.shape))])
         return False, notes
 
     if list(m_df.columns) != list(p_df.columns):
@@ -160,8 +175,14 @@ def compare_frames(m_df, p_df, name, rtol, atol, out):
                 rdiff[bad == False] = -1  # noqa: E712
                 out(f"  [numeric] col {j} '{cname}': {nbad}/{nrows} rows differ "
                     f"(max abs diff {adiff.max():.6g}, max rel diff {rdiff.max():.6g})")
+                samps = []
                 for r in np.where(bad)[0][:5]:
                     out(f"      row {r}: matlab={m_num[r]!r} python={p_num[r]!r}")
+                    samps.append((int(r), repr(m_num[r]), repr(p_num[r])))
+                _detail(col_idx=j, col_name=cname, col_type="numeric",
+                        nbad=nbad, nrows=nrows,
+                        max_abs_diff=f"{adiff.max():.6g}",
+                        max_rel_diff=f"{rdiff.max():.6g}", samples=samps)
         else:
             m_s = m_col.fillna("").astype(str)
             p_s = p_col.fillna("").astype(str)
@@ -170,8 +191,13 @@ def compare_frames(m_df, p_df, name, rtol, atol, out):
             if nbad:
                 passed = False
                 out(f"  [string] col {j} '{cname}': {nbad}/{nrows} rows differ")
+                samps = []
                 for r in np.where(bad)[0][:5]:
                     out(f"      row {r}: matlab='{m_s.iloc[r]}' python='{p_s.iloc[r]}'")
+                    samps.append((int(r), m_s.iloc[r], p_s.iloc[r]))
+                _detail(col_idx=j, col_name=cname, col_type="string",
+                        nbad=nbad, nrows=nrows, max_abs_diff="", max_rel_diff="",
+                        samples=samps)
     out(f"  -> {'PASS' if passed else 'FAIL'}")
     return passed, notes
 
@@ -211,6 +237,8 @@ def main():
     ap.add_argument("--atol", type=float, default=1e-8)
     ap.add_argument("--skip-input-agent", action="store_true",
                     help="skip the final input_agent.csv comparison")
+    ap.add_argument("--csv-out", default=None,
+                    help="write a detailed per-column mismatch report to this CSV path")
     args = ap.parse_args()
     out = print
 
@@ -242,6 +270,7 @@ def main():
             out(f"WARNING: bigloop {b}: no {b}_userassignment.mat in MATLAB folder")
 
     results = []  # (label, passed)
+    col_details = []  # per-column mismatch dicts (for --csv-out)
     for b in bigloops:
         for stem in RESULT_STEMS:
             for kind in RESULT_KINDS:
@@ -257,7 +286,8 @@ def main():
                 m_df = read_loose_csv(mp)
                 p_df = read_loose_csv(pp)
                 passed, notes = compare_frames(m_df, p_df, label,
-                                               args.rtol, args.atol, out)
+                                               args.rtol, args.atol, out,
+                                               details=col_details)
                 for n in notes:
                     out(f"  note: {n}")
                 results.append((label, passed))
@@ -268,7 +298,8 @@ def main():
         pp = os.path.join(args.python, "input_agent.csv")
         if os.path.isfile(mp) and os.path.isfile(pp):
             passed, notes = compare_frames(read_loose_csv(mp), read_loose_csv(pp),
-                                           label, args.rtol, args.atol, out)
+                                           label, args.rtol, args.atol, out,
+                                           details=col_details)
             for n in notes:
                 out(f"  note: {n}")
             results.append((label, passed))
@@ -284,6 +315,34 @@ def main():
         out("OVERALL: PASS -- MATLAB and Python results match within tolerance.")
     else:
         out("OVERALL: FAIL -- see mismatches above.")
+
+    if args.csv_out:
+        # One row per mismatching column; samples expanded as sample_1..5
+        # each formatted as "row|matlab|python".
+        fieldnames = ["file", "passed", "col_idx", "col_name", "col_type",
+                      "nbad", "nrows", "max_abs_diff", "max_rel_diff",
+                      "sample_1", "sample_2", "sample_3", "sample_4", "sample_5"]
+        pass_by_file = dict(results)
+        with open(args.csv_out, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fieldnames)
+            w.writeheader()
+            for d in col_details:
+                row = {k: d.get(k, "") for k in fieldnames}
+                row["passed"] = pass_by_file.get(d["file"], "")
+                samps = d.get("samples", []) or []
+                for si in range(5):
+                    key = f"sample_{si+1}"
+                    if si < len(samps):
+                        r, mv, pv = samps[si]
+                        row[key] = f"{r}|{mv}|{pv}"
+                    else:
+                        row[key] = ""
+                # drop the raw samples list (not a fieldname)
+                row.pop("samples", None)
+                w.writerow({k: row[k] for k in fieldnames})
+        out(f"\nWrote detailed mismatch report to {args.csv_out} "
+            f"({len(col_details)} mismatching columns)")
+
     return 0 if npass == len(results) and results else 1
 
 
