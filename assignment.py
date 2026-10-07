@@ -586,7 +586,8 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         )[0]
 
-
+        if i == 1:
+            print(f"DEBUG agent 1: agentOD={agentOD[i]}, matches={len(matches)}, routelocation rows={len(routelocation)}")
 
         if len(matches) == 0:
 
