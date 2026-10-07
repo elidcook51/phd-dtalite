@@ -5,6 +5,20 @@ import shutil
 import subprocess
 
 from assignment import assignment, comassignment, sanitize_dtalite_outputs
+try:
+    from progress import get_pbar, dtalite_kwargs
+    _HAS_PROGRESS = True
+except ImportError:
+    _HAS_PROGRESS = False
+    def get_pbar(*a, **k):
+        class _D:
+            def update(self, n=1): pass
+            def set_description(self, d): pass
+            def set_postfix_str(self, s): pass
+            def close(self): pass
+        return _D()
+    def dtalite_kwargs():
+        return {}
 
 import numpy as np
 
@@ -502,11 +516,10 @@ def msa(bigloop, p, p_fix, p_realtime):
 
 
 
+    _pbar = get_pbar(bigloop, total=20)
     for itr in range(1, 19):
 
-        print(f"Iteration {itr}")
-
-        print(f"Starting running assignment")
+        _pbar.set_description(f"Bigloop {bigloop} itr {itr}/18")
 
 
 
@@ -862,9 +875,12 @@ def msa(bigloop, p, p_fix, p_realtime):
 
         subprocess.run(
 
-            [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
+            [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
+
+            **dtalite_kwargs()
 
         )
+        _pbar.update(1)
 
         sanitize_dtalite_outputs()
 
@@ -1034,7 +1050,9 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     subprocess.run(
 
-        [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
+        [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
+
+            **dtalite_kwargs()
 
     )
 
@@ -1072,6 +1090,8 @@ def msa(bigloop, p, p_fix, p_realtime):
 
 
 
+    _pbar.set_description(f"Bigloop {bigloop} predict+comassign")
+    _pbar.update(1)
     print('#' * 20)
 
     print('\n' * 5)
@@ -1154,7 +1174,9 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     subprocess.run(
 
-        [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
+        [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
+
+            **dtalite_kwargs()
 
     )
 
@@ -1213,6 +1235,6 @@ def msa(bigloop, p, p_fix, p_realtime):
         }
 
     )
-
-
-
+    _pbar.set_description(f"Bigloop {bigloop} done")
+    _pbar.update(1)
+    _pbar.close()

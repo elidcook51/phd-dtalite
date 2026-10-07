@@ -1,4 +1,9 @@
 import numpy as np
+try:
+    from progress import dtalite_kwargs as _dtalite_kw
+except ImportError:
+    def _dtalite_kw():
+        return {}
 
 import pandas as pd
 
@@ -22,8 +27,6 @@ from realtimeassignment import comrealtimeassignment, realtimeassignment_fast
 
 import time
 
-import warnings
-warnings.filterwarnings("ignore", category=RuntimeWarning, message="divide by zero*")
 
 
 def sanitize_dtalite_csv(path):
@@ -2695,7 +2698,9 @@ def comassignment(
 
         subprocess.run(
 
-            [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True
+            [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
+
+            **_dtalite_kw()
 
         )
 

@@ -596,47 +596,54 @@ def realtimeassignment_fast(
             dtype=object
         )
 
-        # Group observed travel times by normalized path and integer
-        # departure minute. This replaces a complete output_agent scan
-        # for every choiceset cell.
+        # Group observed travel times by RAW path string, matching MATLAB
+        # realtimeassignment.m:115 exactly: findagent=find(strcmp(path,agentpath)).
+        # MATLAB then filters by floor(INPUT departure)==k+359 (line 142),
+        # using input_agent departure times, not output departures.
+        # (The old code normalized to int-tuples, which finds matches where
+        # MATLAB's strcmp finds none, e.g. '10.0;17.0;' vs '10;17;'.)
+        # Key: raw path string -> list of (input_departure, travel_time).
         grouped_observations = {}
 
-        for output_id, departure, travel_time, path in zip(
+        # agent[:,0]=agent_id, agent[:,1]=input departure time
+        _input_dep_by_id = {}
+        for _r in range(agent.shape[0]):
+            _aid = int(agent[_r, 0])
+            _input_dep_by_id[_aid] = float(agent[_r, 1])
+
+        for output_id, travel_time, path in zip(
             output_agent_ids,
-            output_departures,
             output_travel_times,
             output_paths,
         ):
             if (
                 not np.isfinite(output_id)
-                or not np.isfinite(departure)
                 or not np.isfinite(travel_time)
             ):
                 continue
-
-            path_nodes = normalize_path(path)
-            if path_nodes is None:
+            if not isinstance(path, str):
+                path = str(path)
+            raw_path = path.strip()
+            if not raw_path:
                 continue
+            aid = int(output_id)
+            inp_dep = _input_dep_by_id.get(aid)
+            if inp_dep is None or not np.isfinite(inp_dep):
+                continue
+            grouped_observations.setdefault(raw_path, []).append(
+                (float(inp_dep), float(travel_time)))
 
-            observation_key = (
-                path_nodes,
-                int(np.floor(departure)),
-            )
-
-            grouped_observations.setdefault(
-                observation_key, []
-            ).append(float(travel_time))
-
-        # Store mean and maximum once so they are not recalculated for
-        # duplicate paths in the choiceset.
-        path_observations = {
-            observation_key: (
-                float(np.mean(values)),
-                float(np.max(values)),
-            )
-            for observation_key, values
-            in grouped_observations.items()
-        }
+        # For the current period, filter by floor(input_dep)==td_departure_time
+        # and store (mean, max). Matches MATLAB's ttloc logic.
+        path_observations = {}
+        for raw_path, pairs in grouped_observations.items():
+            vals = [tt for dep, tt in pairs
+                    if int(np.floor(dep)) == td_departure_time]
+            if vals:
+                path_observations[raw_path] = (
+                    float(np.mean(vals)),
+                    float(np.max(vals)),
+                )
 
     # ---------------------------------------------------------
     # Read current TD-link information
@@ -799,9 +806,10 @@ def realtimeassignment_fast(
             if path_nodes is None:
                 continue
 
-            observed_result = path_observations.get(
-                (path_nodes, td_departure_time)
-            )
+            _raw_path = choiceset[route_index, od_index]
+            if not isinstance(_raw_path, str):
+                _raw_path = str(_raw_path)
+            observed_result = path_observations.get(_raw_path.strip())
 
             calculated_result = unique_route_results.get(path_nodes)
 
