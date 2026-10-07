@@ -886,6 +886,12 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
     final_rposition = []
 
+    # FIX (parity): track agent IDs so the phase-concatenated results
+    # can be reordered to agent-ID order before returning.
+    # realtimeassignment_fast returns choices in (time-window, agent-ID)
+    # order, but msa.py indexes the return values by agent ID.
+    final_agent_ids = []
+
 
 
     for subitr in range(1, phase + 1):
@@ -902,7 +908,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
             inform,
 
-            check
+            p_agent_ret
 
         ) = realtimeassignment_fast(
 
@@ -934,47 +940,17 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         final_rposition.extend(updaterposition)
 
-
-
-        ypath = [
-
-            choiceset[int(choice),int(pos)] for choice, pos in zip(final_choice, final_rposition)
-
-        ]
+        # p_agent_ret[:, 0] holds agent IDs for this phase, in order.
+        final_agent_ids.extend(int(aid) for aid in p_agent_ret[:, 0])
 
 
 
-        for idx, path in enumerate(ypath):
-
-            inputagent[idx][11] = path
-
-
-
-        columns = ['agent_id', 'tour_id', 'from_zone_id', 'to_zone_id', 'from_origin_node_id', 'to_destination_node_id','departure_time_in_min', 'demand_type', 'PCE', 'information_type', 'vehicle_age', 'path_node_sequence', 'vehicle_type', 'pricing_type', 'value_of_time']
-
-
-
-        agent_df = pd.DataFrame(inputagent[:len(final_choice)], columns = columns)
-
-
-
-        agent_df.to_csv('DTALite_Files/input_agent.csv', index = False)
-
-
-
-        start_time = time.time()
-
-        print("Starting DTA Lite running!")
-
-        subprocess.run(
-
-            ['DTALite_Files/DTALite.exe'], cwd = 'DTALite_Files', check = True
-
-        )
-
-        sanitize_dtalite_outputs()  
-
-        print(f"Finished DTA Lite in {time.time() - start_time}")
+    # FIX (parity): reorder phase-concatenated results to agent-ID order.
+    # realtimeassignment_fast returns choices in (time-window, agent-ID)
+    # order, but msa.py indexes return values by agent ID.
+    _order = np.argsort(np.asarray(final_agent_ids, dtype=int))
+    final_choice = [final_choice[i] for i in _order]
+    final_rposition = [final_rposition[i] for i in _order]
 
 
 
