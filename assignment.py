@@ -3,12 +3,22 @@ import warnings
 # Debug: set SAVE_INPUT_DEBUG=1 to save a copy of input_agent.csv
 # before each DTALite run (for diagnosing path divergences).
 def _maybe_save_input_debug(tag):
+    # Writes OUTSIDE the RunX sandbox: walks up to the project root
+    # (folder containing runner_parallel.py) and saves to debug_out/.
     if os.environ.get('SAVE_INPUT_DEBUG') == '1':
         import shutil, datetime
         ts = datetime.datetime.now().strftime('%H%M%S')
-        dst = f"DTALite_Files/input_agent_DEBUG_{tag}_{ts}.csv"
+        d = os.path.abspath("DTALite_Files")
+        root = d
+        for _ in range(5):
+            if os.path.exists(os.path.join(root, "runner_parallel.py")):
+                break
+            root = os.path.dirname(root)
+        outdir = os.path.join(root, "debug_out")
         try:
-            shutil.copyfile("DTALite_Files/input_agent.csv", dst)
+            os.makedirs(outdir, exist_ok=True)
+            dst = os.path.join(outdir, f"input_agent_DEBUG_{tag}_{ts}.csv")
+            shutil.copyfile(os.path.join(d, "input_agent.csv"), dst)
         except Exception:
             pass
 # Suppress the divide-by-zero RuntimeWarning in the member utility tournament
