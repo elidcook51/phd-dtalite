@@ -247,7 +247,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
     # OD, leaving route_length=0 for uncomputed routes -- min() then picked
     # those zero-length routes (e.g. agent 1 got '10;17;16;' instead of
     # '10;16;'). Compute for all columns like MATLAB.
-    used_columns = np.arange(ncols)
+    used_columns = np.arange(choiceset.shape[1])
 
 
 
