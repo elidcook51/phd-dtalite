@@ -886,11 +886,6 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
     final_rposition = []
 
-    # FIX (parity): track agent IDs so the phase-concatenated results
-    # can be reordered to agent-ID order before returning.
-    # realtimeassignment_fast returns choices in (time-window, agent-ID)
-    # order, but msa.py indexes the return values by agent ID.
-    final_agent_ids = []
 
 
 
@@ -908,7 +903,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
             inform,
 
-            p_agent_ret
+            check
 
         ) = realtimeassignment_fast(
 
@@ -940,25 +935,6 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         final_rposition.extend(updaterposition)
 
-        # p_agent_ret[:, 0] holds agent IDs for this phase, in order.
-        final_agent_ids.extend(int(aid) for aid in p_agent_ret[:, 0])
-
-
-
-    # FIX (parity): reorder phase-concatenated results to inputagent row order.
-    # realtimeassignment_fast returns choices in (time-window, agent-ID)
-    # order, but msa.py indexes return values by inputagent row position.
-    # Map via actual agent IDs from inputagent (robust to 0/1-indexing).
-    _id_to_row = {int(inputagent[j][0]): j for j in range(dsize)}
-    _ordered_choice = [0] * dsize
-    _ordered_rposition = [0] * dsize
-    for _aid, _ch, _rp in zip(final_agent_ids, final_choice, final_rposition):
-        _row = _id_to_row.get(int(_aid))
-        if _row is not None:
-            _ordered_choice[_row] = int(_ch)
-            _ordered_rposition[_row] = int(_rp)
-    final_choice = _ordered_choice
-    final_rposition = _ordered_rposition
 
 
 

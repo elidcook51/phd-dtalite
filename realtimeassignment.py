@@ -847,10 +847,18 @@ def realtimeassignment_fast(
     period_start = 360.0 + phlength * (itr - 1)
     period_end = 360.0 + phlength * itr
 
-    period_mask = (
-        (agent[:, 1] > period_start)
-        & (agent[:, 1] <= period_end)
-    )
+    # FIX (parity): include the lower bound for the first phase so agents
+    # with departure exactly 360.0 are not excluded from all phases.
+    if itr == 1:
+        period_mask = (
+            (agent[:, 1] >= period_start)
+            & (agent[:, 1] <= period_end)
+        )
+    else:
+        period_mask = (
+            (agent[:, 1] > period_start)
+            & (agent[:, 1] <= period_end)
+        )
 
     p_agent = agent[period_mask]
 
