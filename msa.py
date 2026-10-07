@@ -1,4 +1,13 @@
 import os
+def _maybe_save_input_debug(tag):
+    if os.environ.get('SAVE_INPUT_DEBUG') == '1':
+        import shutil, datetime
+        ts = datetime.datetime.now().strftime('%H%M%S')
+        dst = f"DTALite_Files/input_agent_DEBUG_{tag}_{ts}.csv"
+        try:
+            shutil.copyfile("DTALite_Files/input_agent.csv", dst)
+        except Exception:
+            pass
 
 import shutil
 
@@ -870,6 +879,7 @@ def msa(bigloop, p, p_fix, p_realtime):
             'DTALite_Files/input_agent.csv', index = False
 
         )
+        _maybe_save_input_debug('msa_init')
 
 
 
@@ -1045,6 +1055,7 @@ def msa(bigloop, p, p_fix, p_realtime):
 
 
     pd.DataFrame(inputagent, columns=columns).to_csv('DTALite_Files/input_agent.csv', index = False)
+    _maybe_save_input_debug('msa')
 
 
 
@@ -1165,6 +1176,7 @@ def msa(bigloop, p, p_fix, p_realtime):
 
 
     pd.DataFrame(inputagent, columns=columns).to_csv('DTALite_Files/input_agent.csv', index = False)
+    _maybe_save_input_debug('msa')
 
 
 

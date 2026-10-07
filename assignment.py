@@ -1,5 +1,16 @@
 import numpy as np
 import warnings
+# Debug: set SAVE_INPUT_DEBUG=1 to save a copy of input_agent.csv
+# before each DTALite run (for diagnosing path divergences).
+def _maybe_save_input_debug(tag):
+    if os.environ.get('SAVE_INPUT_DEBUG') == '1':
+        import shutil, datetime
+        ts = datetime.datetime.now().strftime('%H%M%S')
+        dst = f"DTALite_Files/input_agent_DEBUG_{tag}_{ts}.csv"
+        try:
+            shutil.copyfile("DTALite_Files/input_agent.csv", dst)
+        except Exception:
+            pass
 # Suppress the divide-by-zero RuntimeWarning in the member utility tournament
 # (assignment.py bscale computation). meanstd2's std row has a zero at index 3;
 # MATLAB does the same division silently and gets Inf too -- behavior matches.
@@ -2699,6 +2710,7 @@ def comassignment(
         
 
         df.to_csv("DTALite_Files/input_agent.csv", index=False)
+        _maybe_save_input_debug("uo")
 
 
 
