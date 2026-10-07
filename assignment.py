@@ -242,35 +242,12 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-    used_columns = []
-
-
-
-    for od in used_od_pairs:
-
-
-
-        matches = np.where(
-
-            (routelocation[:,0] == od[0]) & 
-
-            (routelocation[:,1] == od[1])
-
-        )[0]
-
-
-
-        if len(matches) > 0:
-
-            used_columns.append(
-
-                int(routelocation[matches[0],3])
-
-            )
-
-
-
-    used_columns = np.unique(used_columns)
+    # MATLAB computes len/nc for ALL choiceset columns (assignment.m:77-78).
+    # The old used_columns optimization only kept the FIRST route column per
+    # OD, leaving route_length=0 for uncomputed routes -- min() then picked
+    # those zero-length routes (e.g. agent 1 got '10;17;16;' instead of
+    # '10;16;'). Compute for all columns like MATLAB.
+    used_columns = np.arange(ncols)
 
 
 
@@ -585,6 +562,8 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             (routelocation[:,1] == agentOD[i,1])
 
         )[0]
+
+
 
         if len(matches) == 0:
 
@@ -903,7 +882,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
             inform,
 
-            _p_agent
+            check
 
         ) = realtimeassignment_fast(
 
@@ -935,7 +914,8 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         final_rposition.extend(updaterposition)
 
-        _phase_aids.extend(int(v) for v in _p_agent[:, 0])
+        # check is p_agent with agent IDs in column 0
+        _phase_aids.extend(int(v) for v in np.asarray(check)[:, 0])
 
 
 
@@ -951,6 +931,9 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
             _rr[_aid] = int(final_rposition[_k])
     final_choice = _rc
     final_rposition = _rr
+
+
+
 
     savemat(
 
