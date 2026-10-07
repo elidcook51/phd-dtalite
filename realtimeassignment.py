@@ -82,7 +82,7 @@ def comrealtimeassignment(
 
     choiceset = np.asarray(choiceset, dtype=object)
     routelocation = np.asarray(routelocation)
-    n_od_rows, n_route_cols = choiceset.shape
+    n_routes, n_ods = choiceset.shape
 
     # --------------------------------------------------
     # Agent tables (MATLAB: input_agent_initial.csv / output_agent.csv)
@@ -150,22 +150,22 @@ def comrealtimeassignment(
     # --------------------------------------------------
     # Route attributes: len (distance) and nc (link count)
     # --------------------------------------------------
-    len_mat = np.zeros((n_od_rows, n_route_cols))
-    nc = np.zeros((n_od_rows, n_route_cols))
-    path_nodes = np.empty((n_od_rows, n_route_cols), dtype=object)
+    len_mat = np.zeros((n_routes, n_ods))
+    nc = np.zeros((n_routes, n_ods))
+    path_nodes = np.empty((n_routes, n_ods), dtype=object)
     path_nodes.fill(None)
 
-    for od_idx in range(n_od_rows):
-        for route_idx in range(n_route_cols):
-            nodes = _normalize_nodes(choiceset[od_idx, route_idx])
+    for route_idx in range(n_routes):
+        for od_idx in range(n_ods):
+            nodes = _normalize_nodes(choiceset[route_idx, od_idx])
             if nodes is None:
                 continue
-            path_nodes[od_idx, route_idx] = nodes
+            path_nodes[route_idx, od_idx] = nodes
             total = 0.0
             for a, bb in zip(nodes[:-1], nodes[1:]):
                 total += link_len.get((a, bb), 0.0)
-            len_mat[od_idx, route_idx] = total
-            nc[od_idx, route_idx] = len(nodes) - 1
+            len_mat[route_idx, od_idx] = total
+            nc[route_idx, od_idx] = len(nodes) - 1
 
     gas = 3.0
 
@@ -180,12 +180,12 @@ def comrealtimeassignment(
     pltt = {}
     fuelcost = {}
 
-    for od_idx in range(n_od_rows):
-        for route_idx in range(n_route_cols):
-            nodes = path_nodes[od_idx, route_idx]
+    for route_idx in range(n_routes):
+        for od_idx in range(n_ods):
+            nodes = path_nodes[route_idx, od_idx]
             if nodes is None:
                 continue
-            path = choiceset[od_idx, route_idx]
+            path = choiceset[route_idx, od_idx]
 
             observed = None
             if itr != 1:
@@ -204,16 +204,16 @@ def comrealtimeassignment(
                 tt_val, fc_val = traveltimecal_fastv2(
                     timestamp, TDlink, path, length, gas, itr, 0
                 )
-                tt[(od_idx, route_idx)] = tt_val
-                pltt[(od_idx, route_idx)] = tt_val
-                fuelcost[(od_idx, route_idx)] = fc_val
+                tt[(route_idx, od_idx)] = tt_val
+                pltt[(route_idx, od_idx)] = tt_val
+                fuelcost[(route_idx, od_idx)] = fc_val
             else:
-                tt[(od_idx, route_idx)] = float(np.mean(observed))
-                pltt[(od_idx, route_idx)] = float(np.max(observed))
+                tt[(route_idx, od_idx)] = float(np.mean(observed))
+                pltt[(route_idx, od_idx)] = float(np.max(observed))
                 _, fc_val = traveltimecal_fastv2(
                     timestamp, TDlink, path, length, gas, itr, 0
                 )
-                fuelcost[(od_idx, route_idx)] = fc_val
+                fuelcost[(route_idx, od_idx)] = fc_val
 
     # --------------------------------------------------
     # Agents departing in this phase
@@ -249,16 +249,16 @@ def comrealtimeassignment(
         if len(matches) == 0:
             continue
 
-        # OD index (first dim of the transposed choiceset).
-        f = int(routelocation[matches[0], 4])
+        # OD index: Python's routelocation col 3 = OD (MATLAB has it in col 4).
+        f = int(routelocation[matches[0], 3])
 
         # Route indices available for this OD, ascending (MATLAB j = 1..).
         route_ids = sorted(
             {
-                int(routelocation[m, 3])
+                int(routelocation[m, 4])
                 for m in matches
                 if _normalize_nodes(
-                    choiceset[f, int(routelocation[m, 3])]
+                    choiceset[int(routelocation[m, 4]), f]
                 )
                 is not None
             }
@@ -269,11 +269,11 @@ def comrealtimeassignment(
         def attrs(r):
             return np.array(
                 [
-                    len_mat[f, r],
-                    tt[(f, r)],
-                    pltt[(f, r)],
-                    fuelcost[(f, r)],
-                    nc[f, r],
+                    len_mat[r, f],
+                    tt[(r, f)],
+                    pltt[(r, f)],
+                    fuelcost[(r, f)],
+                    nc[r, f],
                 ]
             )
 
@@ -323,10 +323,10 @@ def comrealtimeassignment(
             f"DTALite_Files/pathinfo_comrealass{bigloop}.mat",
             {
                 "len": len_mat,
-                "tt": _dict_to_dense(tt, (n_od_rows, n_route_cols)),
-                "pltt": _dict_to_dense(pltt, (n_od_rows, n_route_cols)),
+                "tt": _dict_to_dense(tt, (n_routes, n_ods)),
+                "pltt": _dict_to_dense(pltt, (n_routes, n_ods)),
                 "fuelcost": _dict_to_dense(
-                    fuelcost, (n_od_rows, n_route_cols)
+                    fuelcost, (n_routes, n_ods)
                 ),
                 "nc": nc,
             },
