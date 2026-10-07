@@ -1,4 +1,9 @@
 import numpy as np
+import os
+_VERBOSE = os.environ.get('DTALITE_VERBOSE') == '1'
+def _vprint(*a, **k):
+    if _VERBOSE:
+        print(*a, **k)
 
 def traveltimecal(timestamp, TDlink, path, length_data, gas, itr, empty):
 
@@ -35,7 +40,7 @@ def traveltimecal(timestamp, TDlink, path, length_data, gas, itr, empty):
                 )
     else:
         if len(traveltimecal.tdlink_map) == 0 or itr == 1:
-            print("  Building TDLink hash map...")
+            _vprint("  Building TDLink hash map...")
 
             traveltimecal.tdlink_map = {}
 
@@ -48,7 +53,7 @@ def traveltimecal(timestamp, TDlink, path, length_data, gas, itr, empty):
 
                 traveltimecal.tdlink_map[key] = TDlink[r, 3]
 
-            print(
+            _vprint(
                 f"  Hash Map created with "
                 f"{len(traveltimecal.tdlink_map)} entries"
             )
@@ -170,7 +175,7 @@ def traveltimecal_fast(timestamp, TDlink, path, length_data, gas, itr, empty):
     # --------------------------------------------------
     if itr == 1 or len(traveltimecal.tdlink_map) == 0:
 
-        print("Building TDlink lookup table...")
+        _vprint("Building TDlink lookup table...")
 
         traveltimecal.tdlink_map = {}
 
@@ -183,12 +188,12 @@ def traveltimecal_fast(timestamp, TDlink, path, length_data, gas, itr, empty):
 
             traveltimecal.tdlink_map[key] = float(TDlink[r, 3])
 
-        print(
+        _vprint(
             f"✓ TDlink lookup table created with "
             f"{len(traveltimecal.tdlink_map):,} entries"
         )
 
-        print("Building length lookup table...")
+        _vprint("Building length lookup table...")
 
         traveltimecal.length_map = {}
 
@@ -204,7 +209,7 @@ def traveltimecal_fast(timestamp, TDlink, path, length_data, gas, itr, empty):
                 float(length_data[r, 3])   # freeflow speed
             )
 
-        print(
+        _vprint(
             f"✓ Length lookup table created with "
             f"{len(traveltimecal.length_map):,} entries"
         )
@@ -345,7 +350,7 @@ def traveltimecal_fastv2(timestamp, TDlink, path, length_data, gas, itr, empty):
         traveltimecal_fastv2._tdlink_ref = TDlink
         traveltimecal_fastv2._length_ref = length_data
 
-        print('Building TDLink cache...')
+        _vprint('Building TDLink cache...')
 
         traveltimecal_fastv2.tdlink_map = {
             (
@@ -356,10 +361,10 @@ def traveltimecal_fastv2(timestamp, TDlink, path, length_data, gas, itr, empty):
             for row in TDlink
         }
 
-        print(f"TDLink entries = ")
-        print(f"{len(traveltimecal_fastv2.tdlink_map):,}")
+        _vprint(f"TDLink entries = ")
+        _vprint(f"{len(traveltimecal_fastv2.tdlink_map):,}")
 
-        print('Building length cache ...')
+        _vprint('Building length cache ...')
 
         traveltimecal_fastv2.length_map = {
             (
@@ -372,8 +377,8 @@ def traveltimecal_fastv2(timestamp, TDlink, path, length_data, gas, itr, empty):
             for row in length_data
         }
 
-        print('Length entries = ')
-        print(f"{len(traveltimecal_fastv2.length_map):,}")
+        _vprint('Length entries = ')
+        _vprint(f"{len(traveltimecal_fastv2.length_map):,}")
 
         traveltimecal_fastv2.path_result_cache = {}
 

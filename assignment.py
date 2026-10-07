@@ -1,4 +1,10 @@
 import numpy as np
+import warnings
+# Suppress the divide-by-zero RuntimeWarning in the member utility tournament
+# (assignment.py bscale computation). meanstd2's std row has a zero at index 3;
+# MATLAB does the same division silently and gets Inf too -- behavior matches.
+warnings.filterwarnings("ignore", category=RuntimeWarning,
+                         message="divide by zero*")
 try:
     from progress import dtalite_kwargs as _dtalite_kw
 except ImportError:

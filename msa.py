@@ -1092,17 +1092,13 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     _pbar.set_description(f"Bigloop {bigloop} predict+comassign")
     _pbar.update(1)
-    print('#' * 20)
-
-    print('\n' * 5)
-
-    print('Starting comassignment')
-
-    print('\n' * 5)
-
-    print('#' * 20)
-
-    print(f"It's been {time.time() - start_time} seconds")
+    if os.environ.get('DTALITE_VERBOSE') == '1':
+        print('#' * 20)
+        print('\n' * 5)
+        print('Starting comassignment')
+        print('\n' * 5)
+        print('#' * 20)
+        print(f"It's been {time.time() - start_time} seconds")
 
 
 
