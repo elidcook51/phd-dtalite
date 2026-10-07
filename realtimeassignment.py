@@ -233,8 +233,8 @@ def comrealtimeassignment(
         agent_id = int(agent_id_all[s_row])
 
         if agent_id not in realtime_set:
-            rtchoice[row] = int(nchoice_arr[agent_id])
-            updaterposition[row] = int(rposition_arr[agent_id])
+            rtchoice[row] = int(nchoice_arr[agent_id - 1])
+            updaterposition[row] = int(rposition_arr[agent_id - 1])
             continue
 
         matches = np.where(
@@ -875,14 +875,14 @@ def realtimeassignment_fast(
         agent_id = int(agent_record[0])
 
         if (
-            0 <= agent_id < nchoice_array.size
-            and 0 <= agent_id < rposition_array.size
+            1 <= agent_id <= nchoice_array.size
+            and 1 <= agent_id <= rposition_array.size
         ):
             rtchoice[period_row] = int(
-                nchoice_array[agent_id]
+                nchoice_array[agent_id - 1]
             )
             updaterposition[period_row] = int(
-                rposition_array[agent_id]
+                rposition_array[agent_id - 1]
             )
 
     # ---------------------------------------------------------
@@ -907,14 +907,14 @@ def realtimeassignment_fast(
         # Preserve the existing route for non-realtime agents.
         if agent_id not in realtime_set:
             if (
-                0 <= agent_id < nchoice_array.size
-                and 0 <= agent_id < rposition_array.size
+                1 <= agent_id <= nchoice_array.size
+                and 1 <= agent_id <= rposition_array.size
             ):
                 rtchoice[period_row] = int(
-                    nchoice_array[agent_id]
+                    nchoice_array[agent_id - 1]
                 )
                 updaterposition[period_row] = int(
-                    rposition_array[agent_id]
+                    rposition_array[agent_id - 1]
                 )
             continue
 
