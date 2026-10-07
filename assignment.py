@@ -886,6 +886,8 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
     final_rposition = []
 
+    _phase_aids = []  # agent IDs in phase-concatenation order
+
 
 
 
@@ -903,7 +905,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
             inform,
 
-            check
+            _p_agent
 
         ) = realtimeassignment_fast(
 
@@ -935,8 +937,22 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
         final_rposition.extend(updaterposition)
 
+        _phase_aids.extend(int(v) for v in _p_agent[:, 0])
 
 
+
+
+    # Reorder phase-concatenated results to agent-ID order.
+    # Init from nchoice/rposition so any agent missing from phases keeps its value.
+    _rc = [int(v) for v in np.asarray(nchoice).reshape(-1)]
+    _rr = [int(v) for v in np.asarray(rposition).reshape(-1)]
+    for _k in range(len(final_choice)):
+        _aid = _phase_aids[_k]
+        if 0 <= _aid < dsize:
+            _rc[_aid] = int(final_choice[_k])
+            _rr[_aid] = int(final_rposition[_k])
+    final_choice = _rc
+    final_rposition = _rr
 
     savemat(
 
