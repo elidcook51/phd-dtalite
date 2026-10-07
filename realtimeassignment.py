@@ -314,8 +314,8 @@ def comrealtimeassignment(
                 pre_croute = r
                 pre_b1 = b0
 
-        rtchoice[row] = f
-        updaterposition[row] = croute
+        rtchoice[row] = croute
+        updaterposition[row] = f
         pre_choice[row] = pre_croute
 
     if itr == int(np.floor(60.0 / phlength)):
