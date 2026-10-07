@@ -22,6 +22,8 @@ from realtimeassignment import comrealtimeassignment, realtimeassignment_fast
 
 import time
 
+import warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning, message="divide by zero*")
 
 
 def sanitize_dtalite_csv(path):
