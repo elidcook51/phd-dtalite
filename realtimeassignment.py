@@ -1,4 +1,7 @@
 import numpy as np
+import csv as _csv
+import os as _os
+import json as _json
 import pandas as pd
 from scipy.io import savemat
 from traveltimecal import traveltimecal, traveltimecal_fast, traveltimecal_fastv2
@@ -1013,4 +1016,28 @@ def realtimeassignment_fast(
             },
         )
 
-    return rtchoice, updaterposition, tt, b, p_agent
+    # UO DEBUG: save target agent decisions
+    try:
+        _os.makedirs("../debug_out", exist_ok=True)
+        _udp = f"../debug_out/uo_debug_bl{bigloop}.csv"
+        _ude = _os.path.exists(_udp)
+        _TARGETS = {5855, 5863, 5874, 5948, 5995}
+        with open(_udp, "a", newline="", encoding="utf-8") as _uf:
+            _uw = _csv.writer(_uf)
+            if not _ude:
+                _uw.writerow(["agent_id","o","d","picked_route_idx","picked_path","n_candidates"])
+            # p_agent contains [agent_id, departure, ...]
+            # rtchoice contains the picked route index
+            # updaterposition contains the OD position
+            for _ri in range(len(p_agent)):
+                try:
+                    _aid = int(p_agent[_ri, 0])
+                    if _aid in _TARGETS:
+                        _pr = int(rtchoice[_ri, 0]) if rtchoice.ndim > 1 else int(rtchoice[_ri])
+                        _up = int(updaterposition[_ri, 0]) if updaterposition.ndim > 1 else int(updaterposition[_ri])
+                        _uw.writerow([_aid, "", "", _pr, "", "", f"up={_up}"])
+                except:
+                    pass
+    except:
+        pass
+        return rtchoice, updaterposition, tt, b, p_agent
