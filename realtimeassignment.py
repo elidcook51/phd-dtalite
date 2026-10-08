@@ -1,4 +1,7 @@
 import numpy as np
+import csv as _csv
+import os as _os
+import json as _json
 import pandas as pd
 from scipy.io import savemat
 from traveltimecal import traveltimecal, traveltimecal_fast, traveltimecal_fastv2
@@ -281,21 +284,6 @@ def comrealtimeassignment(
         pref = int(user[agent_id, 1])
         wrow = weights[pref - 1, :5]
         dataset2 = pref >= 16650
-        # DEBUG SAVE: write agent tournament info
-        try:
-            import csv as _csv2
-            _dbg_path = f'DTALite_Files/debug_predict_{bigloop}.csv'
-            _dbg_exists = __import__('os').path.exists(_dbg_path)
-            with open(_dbg_path, 'a', newline='') as _df:
-                _w = _csv2.writer(_df)
-                if not _dbg_exists:
-                    _w.writerow(['agent_id','pref','dataset2','user_row0','user_row1','route_ids','wrow'])
-                _w.writerow([int(agent_id), int(pref), bool(dataset2), 
-                             float(user[agent_id,0]), float(user[agent_id,1]),
-                             ';'.join(map(str, route_ids)),
-                             ';'.join(map(str, wrow))])
-        except Exception as _e:
-            pass
 
         b1 = attrs(route_ids[0])
         pre_b1 = b1.copy()
@@ -331,6 +319,25 @@ def comrealtimeassignment(
 
         rtchoice[row] = f
         updaterposition[row] = croute
+        # DEBUG: save complete agent data
+        try:
+            _os.makedirs("../debug_out", exist_ok=True)
+            _dp = f"../debug_out/predict_debug_bl{bigloop}.csv"
+            _de = _os.path.exists(_dp)
+            with open(_dp, "a", newline="", encoding="utf-8") as _df:
+                _w = _csv.writer(_df)
+                if not _de:
+                    _w.writerow(["agent_id","o","d","pref","dataset2","user0","user1","route_ids","wrow","attrs","croute"])
+                _ad = {}
+                for _rr in route_ids:
+                    try:
+                        _aa = attrs(_rr)
+                        _ad[str(_rr)] = [round(float(_aa[0]),2), round(float(_aa[1]),2), round(float(_aa[2]),2), round(float(_aa[3]),4), int(_aa[4])]
+                    except:
+                        _ad[str(_rr)] = ["ERR"]
+                _w.writerow([int(agent_id), int(o), int(d), int(pref), bool(dataset2), float(user[agent_id,0]), float(user[agent_id,1]), ";".join(map(str, route_ids)), ";".join([f"{x:.6f}" for x in wrow]), _json.dumps(_ad), int(croute)])
+        except Exception:
+            pass
         pre_choice[row] = pre_croute
 
     if itr == int(np.floor(60.0 / phlength)):
