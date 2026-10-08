@@ -277,6 +277,16 @@ def comrealtimeassignment(
                 ]
             )
 
+        # TEMP DEBUG
+        if agent_id == 5855:
+            import sys
+            print(f"DEBUG5855 predict: routes={route_ids}", file=sys.stderr)
+            print(f"DEBUG5855 pref={pref} dataset2={dataset2}", file=sys.stderr)
+            for r in route_ids:
+                a = attrs(r)
+                print(f"  route {r}: len={a[0]:.1f} tt={a[1]:.2f} pltt={a[2]:.2f} fc={a[3]:.2f} nc={a[4]:.0f}", file=sys.stderr)
+            print(f"  weights={wrow}", file=sys.stderr)
+
         # The agent's own preference row (MATLAB 1-based IDs).
         pref = int(user[agent_id, 1])
         wrow = weights[pref - 1, :5]
