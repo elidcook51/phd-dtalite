@@ -279,6 +279,10 @@ def comrealtimeassignment(
 
         # TEMP DEBUG
         if agent_id == 5855:
+            import hashlib
+            with open('DTALite_Files/SiouxFalls_net.xlsx', 'rb') as f:
+                md5 = hashlib.md5(f.read()).hexdigest()
+            print(f"DEBUG5855 file MD5: {md5}", file=sys.stderr)
             import sys
             print(f"DEBUG5855 predict: routes={route_ids}", file=sys.stderr)
             print(f"DEBUG5855 pref={pref} dataset2={dataset2}", file=sys.stderr)
