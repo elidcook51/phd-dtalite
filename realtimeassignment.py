@@ -277,13 +277,8 @@ def comrealtimeassignment(
                 ]
             )
 
-        # TEMP DEBUG
-
         # The agent's own preference row (MATLAB 1-based IDs).
-        # Fix off-by-one: user file is 1-indexed, agent_id is 0-indexed
-        # user[5854] = agent 5855 (correct), user[5855] = agent 5856 (wrong)
         pref = int(user[agent_id - 1, 1]) if agent_id > 0 else int(user[0, 1])
-
         wrow = weights[pref - 1, :5]
         dataset2 = pref >= 16650
 

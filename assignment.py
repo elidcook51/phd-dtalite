@@ -1,5 +1,26 @@
 import numpy as np
 import warnings
+# Debug: set SAVE_INPUT_DEBUG=1 to save a copy of input_agent.csv
+# before each DTALite run (for diagnosing path divergences).
+def _maybe_save_input_debug(tag):
+    # Writes OUTSIDE the RunX sandbox: walks up to the project root
+    # (folder containing runner_parallel.py) and saves to debug_out/.
+    if os.environ.get('SAVE_INPUT_DEBUG') == '1':
+        import shutil, datetime
+        ts = datetime.datetime.now().strftime('%H%M%S')
+        d = os.path.abspath("DTALite_Files")
+        root = d
+        for _ in range(5):
+            if os.path.exists(os.path.join(root, "runner_parallel.py")):
+                break
+            root = os.path.dirname(root)
+        outdir = os.path.join(root, "debug_out")
+        try:
+            os.makedirs(outdir, exist_ok=True)
+            dst = os.path.join(outdir, f"input_agent_DEBUG_{tag}_{ts}.csv")
+            shutil.copyfile(os.path.join(d, "input_agent.csv"), dst)
+        except Exception:
+            pass
 # Suppress the divide-by-zero RuntimeWarning in the member utility tournament
 # (assignment.py bscale computation). meanstd2's std row has a zero at index 3;
 # MATLAB does the same division silently and gets Inf too -- behavior matches.
@@ -734,11 +755,11 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
                 # MATLAB weights() is 1-based; user preference IDs are 1-based
 
-                uid = int(user[i,1]) - 1
+                uid = int(user[i-1,1]) - 1 if i > 0 else int(user[0,1]) - 1
 
 
 
-                if int(user[i,1]) < 16650:
+                if (int(user[i-1,1]) if i > 0 else int(user[0,1])) < 16650:
 
                     # Dataset28 distribution: no standardization
 
@@ -1598,7 +1619,7 @@ def fixedcomassignment(
 
 
 
-                    if user[i, 1] < 16650:
+                    if (user[i-1, 1] if i > 0 else user[0, 1]) < 16650:
 
 
 
@@ -1608,7 +1629,7 @@ def fixedcomassignment(
 
                         # MATLAB weights() is 1-based; user preference IDs are 1-based
 
-                        uid = int(user[i, 1]) - 1
+                        uid = int(user[i-1, 1]) - 1 if i > 0 else int(user[0, 1]) - 1
 
 
 
@@ -1634,7 +1655,7 @@ def fixedcomassignment(
 
 
 
-                        uid = int(user[i, 1]) - 1
+                        uid = int(user[i-1, 1]) - 1 if i > 0 else int(user[0, 1]) - 1
 
 
 
@@ -2322,7 +2343,7 @@ def comassignment(
 
 
 
-                    if user[i, 1] < 16650:
+                    if (user[i-1, 1] if i > 0 else user[0, 1]) < 16650:
 
 
 
@@ -2332,7 +2353,7 @@ def comassignment(
 
                         # MATLAB weights() is 1-based; user preference IDs are 1-based
 
-                        uid = int(user[i, 1]) - 1
+                        uid = int(user[i-1, 1]) - 1 if i > 0 else int(user[0, 1]) - 1
 
 
 
@@ -2356,7 +2377,7 @@ def comassignment(
 
 
 
-                        uid = int(user[i, 1]) - 1
+                        uid = int(user[i-1, 1]) - 1 if i > 0 else int(user[0, 1]) - 1
 
 
 
@@ -2699,6 +2720,7 @@ def comassignment(
         
 
         df.to_csv("DTALite_Files/input_agent.csv", index=False)
+        _maybe_save_input_debug("uo")
 
 
 
