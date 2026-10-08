@@ -1,7 +1,4 @@
 import numpy as np
-import csv as _csv
-import os as _os
-import json as _json
 import pandas as pd
 from scipy.io import savemat
 from traveltimecal import traveltimecal, traveltimecal_fast, traveltimecal_fastv2
@@ -851,6 +848,21 @@ def realtimeassignment_fast(
             fuelcost[route_index][od_index] = {
                 period_key: fuel_value
             }
+            # UO TARGET DEBUG
+            try:
+                _tgt = {5855}
+                # Log every route evaluated (not just targets, to see what's considered)
+                import os as _o2, csv as _c2
+                _o2.makedirs("debug_out", exist_ok=True)
+                _pp = "debug_out/uo_routes_bl%d.csv" % bigloop
+                _ex = _o2.path.exists(_pp)
+                with open(_pp, "a", newline="") as _ff:
+                    _ww = _c2.writer(_ff)
+                    if not _ex:
+                        _ww.writerow(["route_idx","od_idx","path","mean_tt","has_observed"])
+                    _ww.writerow([route_index, od_index, _raw_path, round(float(mean_tt),2), observed_result is not None])
+            except:
+                pass
 
             current_tt[route_index, od_index] = mean_tt
             current_pltt[route_index, od_index] = maximum_tt
@@ -1016,28 +1028,4 @@ def realtimeassignment_fast(
             },
         )
 
-    # UO DEBUG: save target agent decisions
-    try:
-        _os.makedirs("../debug_out", exist_ok=True)
-        _udp = f"../debug_out/uo_debug_bl{bigloop}.csv"
-        _ude = _os.path.exists(_udp)
-        _TARGETS = {5855, 5863, 5874, 5948, 5995}
-        with open(_udp, "a", newline="", encoding="utf-8") as _uf:
-            _uw = _csv.writer(_uf)
-            if not _ude:
-                _uw.writerow(["agent_id","o","d","picked_route_idx","picked_path","n_candidates"])
-            # p_agent contains [agent_id, departure, ...]
-            # rtchoice contains the picked route index
-            # updaterposition contains the OD position
-            for _ri in range(len(p_agent)):
-                try:
-                    _aid = int(p_agent[_ri, 0])
-                    if _aid in _TARGETS:
-                        _pr = int(rtchoice[_ri, 0]) if rtchoice.ndim > 1 else int(rtchoice[_ri])
-                        _up = int(updaterposition[_ri, 0]) if updaterposition.ndim > 1 else int(updaterposition[_ri])
-                        _uw.writerow([_aid, "", "", _pr, "", "", f"up={_up}"])
-                except:
-                    pass
-    except:
-        pass
     return rtchoice, updaterposition, tt, b, p_agent
