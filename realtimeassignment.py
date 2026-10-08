@@ -1,7 +1,4 @@
 import numpy as np
-import csv as _csv
-import os as _os
-import json as _json
 import pandas as pd
 from scipy.io import savemat
 from traveltimecal import traveltimecal, traveltimecal_fast, traveltimecal_fastv2
@@ -319,46 +316,6 @@ def comrealtimeassignment(
 
         rtchoice[row] = f
         updaterposition[row] = croute
-        # DEBUG v2
-
-        try:
-
-            _os.makedirs("../debug_out", exist_ok=True)
-
-            _dp = f"../debug_out/predict_debug_bl{bigloop}.csv"
-
-            _de = _os.path.exists(_dp)
-
-            with open(_dp, "a", newline="", encoding="utf-8") as _df:
-
-                _w = _csv.writer(_df)
-
-                if not _de:
-
-                    _w.writerow(["agent_id","o","d","pref","dataset2","user0","user1","route_ids","wrow","attrs","croute"])
-
-                _ad = {}
-
-                for _rr in route_ids:
-
-                    try:
-
-                        _aa = attrs(_rr)
-
-                        _ad[str(_rr)] = [round(float(_aa[0]),2), round(float(_aa[1]),2), round(float(_aa[2]),2), round(float(_aa[3]),4), int(_aa[4])]
-
-                    except:
-
-                        _ad[str(_rr)] = ["ERR"]
-
-                _oo = int(agent_od_all[s_row, 0]); _dd = int(agent_od_all[s_row, 1])
-
-                _w.writerow([int(agent_id), _oo, _dd, int(pref), bool(dataset2), float(user[agent_id,0]), float(user[agent_id,1]), ";".join(map(str, route_ids)), ";".join([f"{x:.6f}" for x in wrow]), _json.dumps(_ad), int(croute)])
-
-        except:
-
-            pass
-
         pre_choice[row] = pre_croute
 
     if itr == int(np.floor(60.0 / phlength)):
