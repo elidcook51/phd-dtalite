@@ -278,9 +278,24 @@ def comrealtimeassignment(
             )
 
         # The agent's own preference row (MATLAB 1-based IDs).
-        pref = int(user[agent_id - 1, 1]) if agent_id > 0 else int(user[0, 1])
+        pref = int(user[agent_id, 1])
         wrow = weights[pref - 1, :5]
         dataset2 = pref >= 16650
+        # DEBUG SAVE: write agent tournament info
+        try:
+            import csv as _csv2
+            _dbg_path = f'DTALite_Files/debug_predict_{bigloop}.csv'
+            _dbg_exists = __import__('os').path.exists(_dbg_path)
+            with open(_dbg_path, 'a', newline='') as _df:
+                _w = _csv2.writer(_df)
+                if not _dbg_exists:
+                    _w.writerow(['agent_id','pref','dataset2','user_row0','user_row1','route_ids','wrow'])
+                _w.writerow([int(agent_id), int(pref), bool(dataset2), 
+                             float(user[agent_id,0]), float(user[agent_id,1]),
+                             ';'.join(map(str, route_ids)),
+                             ';'.join(map(str, wrow))])
+        except Exception as _e:
+            pass
 
         b1 = attrs(route_ids[0])
         pre_b1 = b1.copy()
