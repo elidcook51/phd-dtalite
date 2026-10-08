@@ -8,14 +8,18 @@ import os
 
 # generate_links.generate_simple_siouxfalls(mode = 'full')
 
-from scipy.io import loadmat
-data = loadmat('DTALite_Files/0_userassignment.mat')
-m = data['member'].flatten()
-r = data['realtime_user'].flatten()
-f = data['fix_user'].flatten()
-print("member[:5]:", m[:5], "min:", m.min(), "max:", m.max())
-print("realtime[:5]:", r[:5], "min:", r.min(), "max:", r.max())
-print("0 in member?", 0 in m, "| 1 in member?", 1 in m)
+import realtimeassignment
+import inspect
+src = inspect.getsourcefile(realtimeassignment)
+print(f"Loaded from: {src}")
+# Check the actual loaded code
+import realtimeassignment as ra
+source = inspect.getsource(ra.comrealtimeassignment)
+if "agent_id - 1" in source:
+    print("STALE: Fix is in loaded bytecode!")
+else:
+    print("CLEAN: No fix in loaded code")
+
 
 
 # src = "DTALite_Files/input_agent_initial.csv"
