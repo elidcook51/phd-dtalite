@@ -8,17 +8,13 @@ import os
 
 # generate_links.generate_simple_siouxfalls(mode = 'full')
 
-import realtimeassignment
+import assignment
 import inspect
-src = inspect.getsourcefile(realtimeassignment)
-print(f"Loaded from: {src}")
-# Check the actual loaded code
-import realtimeassignment as ra
-source = inspect.getsource(ra.comrealtimeassignment)
-if "agent_id - 1" in source:
-    print("STALE: Fix is in loaded bytecode!")
+source = inspect.getsource(assignment)
+if "user[i-1" in source or "user[i - 1" in source:
+    print("STALE: Fix is in assignment.py!")
 else:
-    print("CLEAN: No fix in loaded code")
+    print("CLEAN: assignment.py has no fix")
 
 
 
