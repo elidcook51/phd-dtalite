@@ -1040,4 +1040,4 @@ def realtimeassignment_fast(
                     pass
     except:
         pass
-        return rtchoice, updaterposition, tt, b, p_agent
+    return rtchoice, updaterposition, tt, b, p_agent
