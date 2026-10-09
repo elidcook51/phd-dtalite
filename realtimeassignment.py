@@ -862,7 +862,10 @@ def realtimeassignment_fast(
                         _ww.writerow(["route_idx","od_idx","path","mean_tt","has_observed"])
                     _ww.writerow([route_index, od_index, _raw_path, round(float(mean_tt),2), observed_result is not None])
             except:
-                pass
+                # TEMP: reveal the error instead of hiding it
+                import traceback
+                traceback.print_exc()
+                raise  # Re-raise so the run crashes visibly instead of silently
 
             current_tt[route_index, od_index] = mean_tt
             current_pltt[route_index, od_index] = maximum_tt
