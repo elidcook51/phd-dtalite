@@ -1,4 +1,6 @@
 import numpy as np
+import csv as _csv
+import os as _os
 import pandas as pd
 from scipy.io import savemat
 from traveltimecal import traveltimecal, traveltimecal_fast, traveltimecal_fastv2
@@ -979,6 +981,24 @@ def realtimeassignment_fast(
         for idx in matches:
             row = int(routelocation[idx, 4])
             col = int(routelocation[idx, 3])
+            # VD2 DEBUG: log selection
+            try:
+                _os.makedirs("../debug_out", exist_ok=True)
+                _pp = "../debug_out/vd2_select_bl%d.csv" % bigloop
+                _ex = _os.path.exists(_pp)
+                with open(_pp, "a", newline="", encoding="utf-8") as _ff:
+                    _w = _csv.writer(_ff)
+                    if not _ex:
+                        _w.writerow(["agent","origin","dest","row","col","path","tt","best_tt"])
+                    # Get path and tt safely
+                    try:
+                        _p = choiceset[row, col]
+                        _t = float(current_tt[row, col]) if 'current_tt' in dir() else -1
+                    except:
+                        _p = "ERR"; _t = -999
+                    _w.writerow([period_row, origin, destination, row, col, _p, _t, float(best_tt) if best_tt != float('inf') else 'inf'])
+            except:
+                pass
 
             path = choiceset[row, col]
 
