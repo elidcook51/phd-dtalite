@@ -977,11 +977,8 @@ def realtimeassignment_fast(
         best_tt = np.inf
 
         for idx in matches:
-            # FIX v2.2: routelocation col 3 = route index, col 4 = OD index.
-            # current_tt and choiceset are indexed [route, OD], so row must be
-            # the route index (col 3) and col must be the OD index (col 4).
-            row = int(routelocation[idx, 3])
-            col = int(routelocation[idx, 4])
+            row = int(routelocation[idx, 4])
+            col = int(routelocation[idx, 3])
 
             path = choiceset[row, col]
 
