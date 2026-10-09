@@ -733,7 +733,7 @@ def realtimeassignment_fast(
     for route_index in range(n_routes):
         for od_index in range(n_ods):
             path_nodes = normalize_path(
-                choiceset[route_index, od_index]
+                choiceset[od_index, route_index]
             )
 
             if path_nodes is None:
@@ -813,7 +813,7 @@ def realtimeassignment_fast(
             if path_nodes is None:
                 continue
 
-            _raw_path = choiceset[route_index, od_index]
+            _raw_path = choiceset[od_index, route_index]
             if not isinstance(_raw_path, str):
                 _raw_path = str(_raw_path)
             observed_result = path_observations.get(_raw_path.strip())
@@ -988,6 +988,20 @@ def realtimeassignment_fast(
 
         rtchoice[period_row] = best_row
         updaterposition[period_row] = best_col
+        
+        # DIAGNOSTIC: Log for OD (10,17) to file
+        if origin == 10 and destination == 17:
+            try:
+                sel_path = choiceset[best_row, best_col]
+            except:
+                sel_path = "ERR"
+            _msg = (f"DIAG-UO-SEL: period_row={period_row}, best_row={best_row}, best_col={best_col}, "
+                    f"best_tt={best_tt:.2f}, sel_path={sel_path}\n")
+            try:
+                with open("../debug_out/diag_uo_1017.txt", "a") as _df:
+                    _df.write(_msg)
+            except:
+                pass
         
         # CLEAN DIAGNOSTIC: Log for OD (10,17) to file - no assumptions
         if origin == 10 and destination == 17:
