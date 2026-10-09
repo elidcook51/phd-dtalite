@@ -830,10 +830,12 @@ def realtimeassignment_fast(
             if observed_result is None:
                 mean_tt = calculated_tt
                 maximum_tt = calculated_tt
+                # Only print for OD (10,17) to avoid spam
+                if _raw_path in ('10;17;', '10;16;17;', '10;15;19;17;'):
+                    print(f"UO FALLBACK: path={_raw_path}, tt={calculated_tt:.2f}")
             else:
                 mean_tt, maximum_tt = observed_result
 
-            print(f"UO FALLBACK: path={_raw_path}, tt={calculated_tt:.2f}")
 
             mean_tt = float(mean_tt)
             maximum_tt = float(maximum_tt)
