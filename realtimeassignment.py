@@ -1,7 +1,4 @@
 import numpy as np
-import csv as _csv
-import os as _os
-import json as _json
 import pandas as pd
 from scipy.io import savemat
 from traveltimecal import traveltimecal, traveltimecal_fast, traveltimecal_fastv2
@@ -878,18 +875,6 @@ def realtimeassignment_fast(
                 raise  # Re-raise so the run crashes visibly instead of silently
 
             current_tt[route_index, od_index] = mean_tt
-            # VD1 DEBUG: log tt calculation
-            try:
-                _os.makedirs("../debug_out", exist_ok=True)
-                _pp1 = "../debug_out/vd1_uo_tt_bl%d.csv" % bigloop
-                _ex1 = _os.path.exists(_pp1)
-                with open(_pp1, "a", newline="", encoding="utf-8") as _f1:
-                    _w1 = _csv.writer(_f1)
-                    if not _ex1:
-                        _w1.writerow(["route_idx","od_idx","path","mean_tt","has_observed"])
-                    _w1.writerow([route_index, od_index, _raw_path, round(float(mean_tt),2), observed_result is not None])
-            except:
-                pass
             current_pltt[route_index, od_index] = maximum_tt
             current_fuelcost[route_index, od_index] = fuel_value
 
@@ -1019,18 +1004,6 @@ def realtimeassignment_fast(
 
             cur_tt = current_tt[row, col]
 
-            # VD1 DEBUG: log selection candidates
-            try:
-                _os.makedirs("../debug_out", exist_ok=True)
-                _pp2 = "../debug_out/vd1_uo_select_bl%d.csv" % bigloop
-                _ex2 = _os.path.exists(_pp2)
-                with open(_pp2, "a", newline="", encoding="utf-8") as _f2:
-                    _w2 = _csv.writer(_f2)
-                    if not _ex2:
-                        _w2.writerow(["agent_id","origin","dest","route_idx","od_idx","path","cur_tt","best_tt_so_far"])
-                    _w2.writerow([int(agent_id) if 'agent_id' in dir() else -1, origin, destination, row, col, path, round(float(cur_tt),2), round(float(best_tt),2) if best_tt != float('inf') else 'inf'])
-            except:
-                pass
             if cur_tt < best_tt:
                 best_tt = cur_tt
                 best_row = row
@@ -1038,15 +1011,6 @@ def realtimeassignment_fast(
 
         if best_row < 0:
             continue
-
-        # VD1 DEBUG: log final selection
-        try:
-            _pp3 = "../debug_out/vd1_uo_select_bl%d.csv" % bigloop
-            with open(_pp3, "a", newline="", encoding="utf-8") as _f3:
-                _w3 = _csv.writer(_f3)
-                _w3.writerow(["FINAL", int(agent_id) if 'agent_id' in dir() else -1, origin, destination, best_row, best_col, round(float(best_tt),2)])
-        except:
-            pass
 
         rtchoice[period_row] = best_row
         updaterposition[period_row] = best_col
