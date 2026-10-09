@@ -724,7 +724,7 @@ def realtimeassignment_fast(
     len_arr = np.zeros((n_routes, n_ods), dtype=float)
     nc = np.zeros((n_routes, n_ods), dtype=float)
 
-    path_nodes_matrix = np.empty((n_routes, n_ods), dtype=object)
+    path_nodes_matrix = np.empty((n_ods, n_routes), dtype=object)
     path_nodes_matrix.fill(None)
 
     # Cache static route attributes for duplicate path strings.
@@ -739,7 +739,7 @@ def realtimeassignment_fast(
             if path_nodes is None:
                 continue
 
-            path_nodes_matrix[route_index, od_index] = path_nodes
+            path_nodes_matrix[od_index, route_index] = path_nodes
 
             static_result = static_path_cache.get(path_nodes)
 
@@ -784,19 +784,19 @@ def realtimeassignment_fast(
     # Dense arrays are faster for best-route selection, while the
     # nested list/dictionary objects preserve the original output type.
     current_tt = np.full(
-        (n_routes, n_ods),
+        (n_ods, n_routes),
         np.inf,
         dtype=float,
     )
 
     current_pltt = np.full(
-        (n_routes, n_ods),
+        (n_ods, n_routes),
         np.inf,
         dtype=float,
     )
 
     current_fuelcost = np.full(
-        (n_routes, n_ods),
+        (n_ods, n_routes),
         np.nan,
         dtype=float,
     )
@@ -807,7 +807,7 @@ def realtimeassignment_fast(
     for route_index in range(n_routes):
         for od_index in range(n_ods):
             path_nodes = path_nodes_matrix[
-                route_index, od_index
+                od_index, route_index
             ]
 
             if path_nodes is None:
@@ -851,9 +851,9 @@ def realtimeassignment_fast(
                 period_key: fuel_value
             }
 
-            current_tt[route_index, od_index] = mean_tt
-            current_pltt[route_index, od_index] = maximum_tt
-            current_fuelcost[route_index, od_index] = fuel_value
+            current_tt[od_index, route_index] = mean_tt
+            current_pltt[od_index, route_index] = maximum_tt
+            current_fuelcost[od_index, route_index] = fuel_value
 
     # ---------------------------------------------------------
     # Select agents departing in the current period
@@ -988,6 +988,20 @@ def realtimeassignment_fast(
 
         rtchoice[period_row] = best_row
         updaterposition[period_row] = best_col
+        
+        # DIAGNOSTIC v2.5: Log UO selection for OD (10,17) to file
+        if origin == 10 and destination == 17:
+            try:
+                _sp = choiceset[best_row, best_col]
+            except:
+                _sp = "ERR"
+            _m = (f"DIAG: row={best_row}, col={best_col}, tt={best_tt:.2f}, "
+                  f"path={_sp}, rtchoice={rtchoice[period_row]}, upos={updaterposition[period_row]}\n")
+            try:
+                with open("../debug_out/diag_5855.txt", "a") as _df:
+                    _df.write(_m)
+            except:
+                pass
         
         # DIAGNOSTIC: Log for OD (10,17) to file
         if origin == 10 and destination == 17:
