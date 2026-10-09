@@ -1,6 +1,4 @@
 import numpy as np
-import csv as _csv
-import os as _os
 import pandas as pd
 from scipy.io import savemat
 from traveltimecal import traveltimecal, traveltimecal_fast, traveltimecal_fastv2
@@ -644,11 +642,8 @@ def realtimeassignment_fast(
         # and store (mean, max). Matches MATLAB's ttloc logic.
         path_observations = {}
         for raw_path, pairs in grouped_observations.items():
-            # FIX v2.1: Use all observed data, don't filter by td_departure_time.
-            # The old filter used iteration-based time (itr*phlength+359) instead of
-            # the agent's actual departure time, causing valid observed data to be
-            # missed. MATLAB filters by the agent's INPUT departure time.
-            vals = [tt for dep, tt in pairs]
+            vals = [tt for dep, tt in pairs
+                    if int(np.floor(dep)) == td_departure_time]
             if vals:
                 path_observations[raw_path] = (
                     float(np.mean(vals)),
@@ -835,12 +830,8 @@ def realtimeassignment_fast(
             if observed_result is None:
                 mean_tt = calculated_tt
                 maximum_tt = calculated_tt
-                # Only print for OD (10,17) to avoid spam
-                if _raw_path in ('10;17;', '10;16;17;', '10;15;19;17;'):
-                    print(f"UO FALLBACK: path={_raw_path}, tt={calculated_tt:.2f}")
             else:
                 mean_tt, maximum_tt = observed_result
-
 
             mean_tt = float(mean_tt)
             maximum_tt = float(maximum_tt)
@@ -857,24 +848,6 @@ def realtimeassignment_fast(
             fuelcost[route_index][od_index] = {
                 period_key: fuel_value
             }
-            # UO TARGET DEBUG
-            try:
-                _tgt = {5855}
-                # Log every route evaluated (not just targets, to see what's considered)
-                import os as _o2, csv as _c2
-                _o2.makedirs("debug_out", exist_ok=True)
-                _pp = "debug_out/uo_routes_bl%d.csv" % bigloop
-                _ex = _o2.path.exists(_pp)
-                with open(_pp, "a", newline="") as _ff:
-                    _ww = _c2.writer(_ff)
-                    if not _ex:
-                        _ww.writerow(["route_idx","od_idx","path","mean_tt","has_observed"])
-                    _ww.writerow([route_index, od_index, _raw_path, round(float(mean_tt),2), observed_result is not None])
-            except:
-                # TEMP: reveal the error instead of hiding it
-                import traceback
-                traceback.print_exc()
-                raise  # Re-raise so the run crashes visibly instead of silently
 
             current_tt[route_index, od_index] = mean_tt
             current_pltt[route_index, od_index] = maximum_tt
@@ -981,24 +954,6 @@ def realtimeassignment_fast(
         for idx in matches:
             row = int(routelocation[idx, 4])
             col = int(routelocation[idx, 3])
-            # VD2 DEBUG: log selection
-            try:
-                _os.makedirs("../debug_out", exist_ok=True)
-                _pp = "../debug_out/vd2_select_bl%d.csv" % bigloop
-                _ex = _os.path.exists(_pp)
-                with open(_pp, "a", newline="", encoding="utf-8") as _ff:
-                    _w = _csv.writer(_ff)
-                    if not _ex:
-                        _w.writerow(["agent","origin","dest","row","col","path","tt","best_tt"])
-                    # Get path and tt safely
-                    try:
-                        _p = choiceset[row, col]
-                        _t = float(current_tt[row, col]) if 'current_tt' in dir() else -1
-                    except:
-                        _p = "ERR"; _t = -999
-                    _w.writerow([period_row, origin, destination, row, col, _p, _t, float(best_tt) if best_tt != float('inf') else 'inf'])
-            except:
-                pass
 
             path = choiceset[row, col]
 
