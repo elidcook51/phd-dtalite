@@ -546,7 +546,9 @@ def realtimeassignment_fast(
             "least four columns."
         )
 
-    n_routes, n_ods = choiceset.shape
+    # FIX: choiceset.shape is (n_ods, n_routes) = (576, 10), not (n_routes, n_ods)
+    # The original code swapped them, causing the population loop to use wrong bounds
+    n_ods, n_routes = choiceset.shape
     period_key = int(itr * phlength)
     td_departure_time = period_key + 359
     gas = 3.0
@@ -986,6 +988,22 @@ def realtimeassignment_fast(
 
         rtchoice[period_row] = best_row
         updaterposition[period_row] = best_col
+        
+        # CLEAN DIAGNOSTIC: Log for OD (10,17) to file - no assumptions
+        if origin == 10 and destination == 17:
+            try:
+                sel_path = choiceset[best_row, best_col]
+            except:
+                sel_path = "ERR"
+            _diag_msg = (f"DIAG-UO-SEL: period_row={period_row}, origin={origin}, dest={destination}, "
+                  f"best_row={best_row}, best_col={best_col}, best_tt={best_tt:.2f}, "
+                  f"sel_path={sel_path}, rtchoice={rtchoice[period_row]}, upos={updaterposition[period_row]}\n")
+            print(_diag_msg, end='')
+            try:
+                with open("../debug_out/diag_uo_1017.txt", "a") as _df:
+                    _df.write(_diag_msg)
+            except:
+                pass
 
     # ---------------------------------------------------------
     # Save final period route information
