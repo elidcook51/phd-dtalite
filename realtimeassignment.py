@@ -833,6 +833,8 @@ def realtimeassignment_fast(
             else:
                 mean_tt, maximum_tt = observed_result
 
+            print(f"UO FALLBACK: path={_raw_path}, tt={calculated_tt:.2f}")
+
             mean_tt = float(mean_tt)
             maximum_tt = float(maximum_tt)
             fuel_value = float(fuel_value)
