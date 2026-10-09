@@ -733,7 +733,7 @@ def realtimeassignment_fast(
     for route_index in range(n_routes):
         for od_index in range(n_ods):
             path_nodes = normalize_path(
-                choiceset[route_index, od_index]
+                choiceset[od_index, route_index]
             )
 
             if path_nodes is None:
