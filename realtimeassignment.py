@@ -986,25 +986,6 @@ def realtimeassignment_fast(
 
         rtchoice[period_row] = best_row
         updaterposition[period_row] = best_col
-        
-        # V9 DIAGNOSTIC: Log UO selection to file (no console spam)
-        # Log for ODs of interest: (10,17), (12,15), (12,7), (14,8), (20,10)
-        _diag_od = (origin, destination)
-        if _diag_od in [(10,17), (12,15), (12,7), (14,8), (20,10)]:
-            try:
-                _sel_path = choiceset[best_row, best_col]
-            except:
-                _sel_path = "ERR"
-            _dmsg = (f"V9DIAG period_row={period_row} od=({origin},{destination}) "
-                     f"best_row={best_row} best_col={best_col} best_tt={best_tt:.2f} "
-                     f"path={_sel_path} rtchoice={rtchoice[period_row]} upos={updaterposition[period_row]}\n")
-            try:
-                import os
-                os.makedirs("../debug_out", exist_ok=True)
-                with open("../debug_out/v9_uo_diag.txt", "a") as _df:
-                    _df.write(_dmsg)
-            except:
-                pass
 
     # ---------------------------------------------------------
     # Save final period route information

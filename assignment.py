@@ -2620,10 +2620,6 @@ def comassignment(
 
             if isinstance(path, list):
 
-                print('FOUND LIST')
-
-                print(path)
-
                 path = path[0]
 
                 raise SystemExit
@@ -2631,10 +2627,6 @@ def comassignment(
 
 
             elif isinstance(path, np.ndarray):
-
-                print('FOUND LIST')
-
-                print(path)
 
                 path = path.flat[0]
 
