@@ -642,8 +642,11 @@ def realtimeassignment_fast(
         # and store (mean, max). Matches MATLAB's ttloc logic.
         path_observations = {}
         for raw_path, pairs in grouped_observations.items():
-            vals = [tt for dep, tt in pairs
-                    if int(np.floor(dep)) == td_departure_time]
+            # FIX v2.1: Use all observed data, don't filter by td_departure_time.
+            # The old filter used iteration-based time (itr*phlength+359) instead of
+            # the agent's actual departure time, causing valid observed data to be
+            # missed. MATLAB filters by the agent's INPUT departure time.
+            vals = [tt for dep, tt in pairs]
             if vals:
                 path_observations[raw_path] = (
                     float(np.mean(vals)),
