@@ -976,6 +976,10 @@ def realtimeassignment_fast(
 
             cur_tt = current_tt[row, col]
 
+            # TARGETED DEBUG for agent 5855 only
+            if origin == 10 and destination == 17:
+                print(f"5855-DEBUG: path={path}, tt={cur_tt:.2f}, best_tt={best_tt:.2f}, "
+                    f"row={row}, col={col}, will_pick={cur_tt < best_tt}")
             if cur_tt < best_tt:
                 best_tt = cur_tt
                 best_row = row

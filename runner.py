@@ -8,13 +8,13 @@ import os
 
 # generate_links.generate_simple_siouxfalls(mode = 'full')
 
-import assignment
-import inspect
-source = inspect.getsource(assignment)
-if "user[i-1" in source or "user[i - 1" in source:
-    print("STALE: Fix is in assignment.py!")
-else:
-    print("CLEAN: assignment.py has no fix")
+# Check what tt values were computed for 5855's OD
+# This will tell us if the tt array was populated correctly
+import pandas as pd
+uo = pd.read_csv('DTALite_Files/0UOinfor_agent.csv')
+row = uo[uo['agent_id'].astype(str)=='5855']
+print("5855 UO path:", row.iloc[0]['path_node_sequence'])
+
 
 
 
