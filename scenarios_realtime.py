@@ -1,402 +1,659 @@
-#!/usr/bin/env python3
-"""Real-time route-guidance baselines (Tests 2 & 3 of Bingrong Sun, 2018, Ch. 4).
+"""Travel-time-based real-time route guidance baselines (Tests 2 and 3).
 
-Reactive guidance in the style of Google Maps: every agent departs with the
-shortest-travel-time route under the real-time conditions known at departure.
-Time is discretized into intervals of length sigma (1 min = Test 2,
-10 min = Test 3); an agent departing in interval m sees conditions X_{m-1}.
+Exact per-interval X_{m-1} implementation of the real-time baseline
+experiment from Bingrong Sun's 2018 UVA PhD dissertation, Chapter 4
+("travel time based real-time route guidance"): the evaluation period is
+split into intervals of sigma minutes, and every agent departing in
+interval m is assigned the shortest-travel-time route from its choice set
+under X_{m-1}, the link travel times observed during the previous interval.
+X_{-1} does not exist, so agents departing in interval 0 fall back to
+free-flow times (the dissertation's "historical traffic conditions").
 
-X_{m-1} APPROXIMATION (agreed framework): this is a single pass over
-free-flow link times. X_0 is the free-flow network and X_{m-1} is taken as
-free-flow for every interval, so each agent is assigned the free-flow
-shortest route from its choice-set row. Building true per-interval X_{m-1}
-from repeated DTALite runs is a documented future step. The system assumes
-every user minimizes travel time only; true (preference-based) choices are
-handled elsewhere. sigma_min is recorded per agent in realtime_routes.csv so
-the analysis layer can distinguish the sigma=1 and sigma=10 runs.
+Procedure
+---------
+1. Assign every agent its free-flow shortest choice-set route, write
+   input_agent.csv, and run DTALite once to collect output_LinkTDMOE.csv.
+2. For each interval m >= 1, X_{m-1} maps every directed link to the mean
+   of travel_time_in_min over rows with
+   (m-1)*sigma <= timestamp_in_min < m*sigma  (left-closed, right-open).
+3. Re-assign: an agent departing at time t falls in interval
+   m = floor(t / sigma) and takes the shortest route under X_{m-1}
+   (free-flow times when m == 0, and free-flow for any single link with
+   no observations in the bin).
+4. Write the reactive plan to input_agent.csv, run DTALite once more, and
+   report total vehicle-hours from output_agent.csv.
 
-Outputs (all under --result-dir unless noted):
-  input_agent.csv      - demand template with assigned paths (written into the
-                         DTALite run folder = data dir; DTALite.exe is run
-                         with cwd=data dir, so it reads it there)
-  realtime_routes.csv  - agent_id, path_node_sequence, sigma_min
-  realtime_summary.txt - vehicle-hours from the DTALite run vs the reported
-                         target (26983.1 for sigma=1, 28039.6 for sigma=10)
+This file merges two independently built implementations (builder A and
+builder B, cross-validated to produce bit-identical assignments on 3,000
+agents for sigma = 1 and sigma = 10): it keeps A's input parsing
+(fuzzy column detection, strict ragged-CSV reader, robust choice-set
+loading), multi-candidate DTALite launcher, per-(interval, OD) route
+caching, and failure diagnostics, and takes B's byte-identical template
+writer for input_agent.csv plus its fail-fast checks (duplicate agent
+ids, empty LinkTDMOE).
 
-MERGE NOTE: this file is the validated winner of two independent
-implementations (build C and build D). Both produced byte-identical route
-assignments on all 36,030 demand agents; they differed only in plumbing.
-Kept from D: grid OD lookup with endpoint validation, direct "Free flow
-time" column read, --timeout, travel-time column heuristic, manual
-result-dir default. Kept from C: strict directed link lookup (no undirected
-tolerance), strip-based path-column matching, demand-column validation,
-data-dir validation, --exe override, fail-fast DTALite error handling,
-pandas output writing. Dropped from D: the Dijkstra fallback for
-choice-set-less ODs (no demand agent hits it; keep-template is the
-framework-faithful behavior) and the undirected-link tolerance. Fixed from
-C: DTALite is now run with cwd=data_dir (C ran it from the parent dir while
-writing input_agent.csv into data_dir).
+Targets (Bingrong 2018, 54,045 agents): sigma=1 -> 26,983.1 vehicle-hours,
+sigma=10 -> 28,039.6 vehicle-hours.  This repo's demand has ~36k agents,
+so the summary compares per-agent travel times.
 
-Final review (2026-10-11): fail fast on missing agent_id / departure times
-(used to crash deep in the assignment loop); agents with a missing origin
-or destination now keep the template path instead of crashing.
-
-Requires: Python 3.9+, numpy, pandas, scipy, openpyxl.
+Usage:
+    python scenarios_realtime.py --sigma 1 --result-dir results/realtime_1
+    python scenarios_realtime.py --sigma 10 --data-dir DTALite_Files
 """
 
+from __future__ import annotations
+
 import argparse
-import math
+import csv
 import os
+import shutil
 import subprocess
 import sys
 
 import numpy as np
 import pandas as pd
-import scipy.io
-
-N_ZONES = 24
-TARGET_VH = {1: 26983.1, 10: 28039.6}
+import openpyxl
+from scipy.io import loadmat
 
 
-def log(msg):
-    print("[realtime] %s" % msg, flush=True)
+# Bingrong (2018) Table 4 totals, measured over 54,045 agents.
+TARGET_VEHICLE_HOURS = {1: 26983.1, 10: 28039.6}
+TARGET_N_AGENTS = 54045
+
+DTALITE_TIMEOUT_S = 3600
 
 
-def fail(msg):
-    print("ERROR: " + msg, file=sys.stderr)
-    sys.exit(1)
+class ScenarioError(RuntimeError):
+    """Fail-fast error with a message suitable for printing to the user."""
 
 
-def find_data_dir(given):
-    """Locate the folder holding DTALite_Files contents (network, demand, choice set)."""
-    here = os.path.dirname(os.path.abspath(__file__))
-    candidates = []
-    if given:
-        candidates.append(given)
-    candidates += [
-        os.path.join(here, "repo", "DTALite_Files"),
-        os.path.join(here, "DTALite_Files"),
-        os.path.join(os.getcwd(), "DTALite_Files"),
-    ]
-    for c in candidates:
-        if os.path.isfile(os.path.join(c, "input_agent_initial.csv")):
-            return os.path.abspath(c)
-    fail(
-        "could not find input_agent_initial.csv; tried:\n  "
-        + "\n  ".join(candidates)
-        + "\npass --data-dir explicitly"
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+def detect_column(df, candidates):
+    """Find a DataFrame column by exact, case-insensitive, then substring match."""
+    cols = list(df.columns)
+    lowered = {str(c).strip().lower(): c for c in cols}
+    for cand in candidates:
+        if cand in lowered:
+            return lowered[cand]
+    for cand in candidates:
+        for c in cols:
+            if cand in str(c).strip().lower():
+                return c
+    raise ScenarioError(
+        "could not find any of %s among columns %s" % (candidates, cols)
     )
 
 
-def load_freeflow_times(xlsx_path):
-    """Read (from_node, to_node) -> free-flow travel time in minutes.
+def read_ragged_csv(path, required_columns):
+    """Read a CSV that may carry DTALite's stray trailing commas.
 
-    SiouxFalls_net.xlsx, sheet 'SiouxFalls_net', is the classic
-    transportation-network text format: a header row starting with '~'
-    followed by rows (init node, term node, capacity, length,
-    free flow time, ...). Reads the 'Free flow time' column directly
-    (column F); verified identical to length/speed*60 on this network.
+    Rows longer than the header are trimmed (only when the extra fields
+    are empty; non-empty extras raise); shorter rows are padded.
+    Quoting-aware via the csv module.
     """
-    import openpyxl
+    if not os.path.isfile(path):
+        raise ScenarioError("required file not found: %s" % path)
+    with open(path, "r", newline="") as f:
+        rows = list(csv.reader(f))
+    if not rows:
+        raise ScenarioError("empty CSV file: %s" % path)
+    header = [c.strip() for c in rows[0]]
+    width = len(header)
+    records = []
+    for lineno, row in enumerate(rows[1:], start=2):
+        if len(row) > width:
+            extra = row[width:]
+            if any(cell.strip() != "" for cell in extra):
+                raise ScenarioError(
+                    "%s line %d: non-empty fields beyond the %d-column header"
+                    % (path, lineno, width)
+                )
+            row = row[:width]
+        elif len(row) < width:
+            row = row + [""] * (width - len(row))
+        records.append(row)
+    df = pd.DataFrame(records, columns=header)
+    missing = [c for c in required_columns if c not in df.columns]
+    if missing:
+        raise ScenarioError(
+            "%s is missing required columns %s (found %s)"
+            % (path, missing, list(df.columns))
+        )
+    return df
 
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+
+def read_free_flow_times(xlsx_path):
+    """Free-flow minutes per directed link from SiouxFalls_net.xlsx.
+
+    Classic TNTP layout: a '~' header row, then (init node, term node,
+    length, speed) rows.  Free-flow time = length / speed * 60.
+    """
+    if not os.path.isfile(xlsx_path):
+        raise ScenarioError("network file not found: %s" % xlsx_path)
     wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
-    if "SiouxFalls_net" not in wb.sheetnames:
-        fail("sheet 'SiouxFalls_net' not in %s" % xlsx_path)
-    rows = list(wb["SiouxFalls_net"].iter_rows(values_only=True))
+    ws = wb["SiouxFalls_net"] if "SiouxFalls_net" in wb.sheetnames else wb[wb.sheetnames[0]]
+    rows = list(ws.iter_rows(values_only=True))
     wb.close()
-    data = False
-    times = {}
-    for r in rows:
-        if not data:
-            if r and str(r[0]).strip() == "~":
-                data = True
+
+    header_row = None
+    for i, row in enumerate(rows):
+        if row and str(row[0]).strip() == "~":
+            header_row = i
+            break
+    if header_row is None:
+        raise ScenarioError("could not locate the '~' link table header in %s" % xlsx_path)
+
+    free_flow = {}
+    for row in rows[header_row + 1:]:
+        if len(row) < 5:
             continue
-        if len(r) < 6 or r[1] is None or r[2] is None or r[5] is None:
+        f, t, length, speed = row[1], row[2], row[3], row[4]
+        if not isinstance(f, (int, float)) or isinstance(f, bool):
+            continue  # label or blank row (e.g. 'link length information')
+        if not isinstance(t, (int, float)) or isinstance(t, bool):
             continue
-        times[(int(r[1]), int(r[2]))] = float(r[5])
-    if not times:
-        fail("no link rows parsed from %s" % xlsx_path)
-    log("network: %d directed links with free-flow times" % len(times))
-    return times
-
-
-def parse_path_string(s):
-    """'16;10;' -> [16, 10]; None for empty/invalid."""
-    if s is None:
-        return None
-    try:
-        if pd.isna(s):
-            return None
-    except (TypeError, ValueError):
-        pass
-    if not isinstance(s, str):
-        return None
-    try:
-        nodes = [int(float(x)) for x in s.split(";") if x.strip()]
-    except (TypeError, ValueError):
-        return None
-    return nodes if len(nodes) >= 2 else None
-
-
-def cell_to_string(cell):
-    """Extract the path string from a choice-set .mat cell."""
-    if isinstance(cell, np.ndarray):
-        if cell.size == 0:
-            return None
-        if cell.size == 1:
-            cell = cell.item()
-        else:
-            return None
-    if isinstance(cell, str):
-        return cell
-    if isinstance(cell, np.ndarray) and cell.size > 0:
-        v = cell.flat[0]
-        if isinstance(v, str):
-            return v
-    return None
-
-
-def load_choice_set(mat_path):
-    """finallist (10, 576) -> routes[od_idx] = list of node lists (<=10 routes)."""
-    raw = scipy.io.loadmat(mat_path)["finallist"].T  # (576, 10) = (n_ods, n_routes)
-    n_ods, n_routes = raw.shape
-    log("choiceset: %d OD rows x %d routes" % (n_ods, n_routes))
-    routes = {}
-    for od in range(n_ods):
-        od_routes = []
-        for c in range(n_routes):
-            nodes = parse_path_string(cell_to_string(raw[od, c]))
-            if nodes:
-                od_routes.append(nodes)
-        routes[od] = od_routes
-    usable = sum(1 for r in routes.values() if r)
-    log("usable OD rows: %d (empty: %d)" % (usable, n_ods - usable))
-    return routes
-
-
-def od_index(origin, dest):
-    """Choice-set row for an (origin, dest) pair: 24x24 zone grid, row-major."""
-    return (origin - 1) * N_ZONES + (dest - 1)
-
-
-def validate_od_grid(routes):
-    """Check the grid assumption against every row's first valid route."""
-    bad = 0
-    for od, od_routes in routes.items():
-        if not od_routes:
+        try:
+            length, speed = float(length), float(speed)
+        except (TypeError, ValueError):
             continue
-        o, d = od // N_ZONES + 1, od % N_ZONES + 1
-        nodes = od_routes[0]
-        if nodes[0] != o or nodes[-1] != d:
-            bad += 1
-    return bad
+        if speed <= 0:
+            raise ScenarioError("non-positive speed for link %s -> %s" % (f, t))
+        free_flow[(int(f), int(t))] = length / speed * 60.0
+    if not free_flow:
+        raise ScenarioError("no links parsed from %s" % xlsx_path)
+    return free_flow
 
 
-def route_cost(nodes, times):
-    """Sum of free-flow link minutes; None if any link is missing."""
+def read_demand(csv_path):
+    """Read the agent template; fail fast on NaN agent ids / departures."""
+    df = pd.read_csv(csv_path)
+    agent_col = detect_column(df, ["agent_id"])
+    origin_col = detect_column(df, ["from_origin_node_id", "origin_node_id"])
+    dest_col = detect_column(df, ["to_destination_node_id", "destination_node_id"])
+    dep_col = detect_column(df, ["departure_time_in_min", "departure_time"])
+    path_col = detect_column(df, ["path_node_sequence"])
+
+    df["_agent_id"] = pd.to_numeric(df[agent_col], errors="coerce")
+    df["_departure"] = pd.to_numeric(df[dep_col], errors="coerce")
+    if df["_agent_id"].isna().any():
+        raise ScenarioError("NaN agent_id in %s" % csv_path)
+    if df["_departure"].isna().any():
+        bad = df.loc[df["_departure"].isna(), agent_col].tolist()[:5]
+        raise ScenarioError(
+            "NaN departure_time_in_min for agent(s) %s in %s" % (bad, csv_path)
+        )
+    df["_origin"] = pd.to_numeric(df[origin_col], errors="coerce")
+    df["_dest"] = pd.to_numeric(df[dest_col], errors="coerce")
+    df["_od"] = list(zip(df["_origin"].to_numpy(), df["_dest"].to_numpy()))
+    meta = {"agent_col": agent_col, "path_col": path_col}
+    return df, meta
+
+
+def parse_route_string(text):
+    """'1;2;3;' -> [1, 2, 3]; returns [] when unparseable."""
+    nodes = []
+    for part in str(text).split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            nodes.append(int(float(part)))
+        except (TypeError, ValueError):
+            return []
+    return nodes
+
+
+def read_choice_set(mat_path):
+    """Choice set as dict OD (float, float) -> list of (nodes, links) routes.
+
+    Loads mat['finallist'].T -> (n_ods, n_routes); each cell holds a
+    ';'-separated node string.  A row's OD is read from the endpoints of
+    its first route: origin = float(nodes[0]), dest = float(nodes[-1]).
+    Duplicate routes within a row are kept once.
+    """
+    if not os.path.isfile(mat_path):
+        raise ScenarioError("choice-set file not found: %s" % mat_path)
+    mat = loadmat(mat_path)
+    if "finallist" not in mat:
+        raise ScenarioError("finallist not found in %s" % mat_path)
+    table = mat["finallist"].T
+    od_routes = {}
+    for r in range(table.shape[0]):
+        routes = []
+        seen = set()
+        for c in range(table.shape[1]):
+            cell = np.asarray(table[r, c]).ravel()
+            if cell.size == 0:
+                continue
+            nodes = parse_route_string(cell[0])
+            if len(nodes) < 2 or tuple(nodes) in seen:
+                continue
+            seen.add(tuple(nodes))
+            links = [(nodes[i], nodes[i + 1]) for i in range(len(nodes) - 1)]
+            routes.append((nodes, links))
+        if not routes:
+            continue
+        od = (float(routes[0][0][0]), float(routes[0][0][-1]))
+        od_routes[od] = routes
+    if not od_routes:
+        raise ScenarioError("no routes parsed from %s" % mat_path)
+    return od_routes
+
+
+# ---------------------------------------------------------------------------
+# DTALite
+# ---------------------------------------------------------------------------
+
+def run_dtalite(data_dir, timeout=DTALITE_TIMEOUT_S):
+    """Run DTALite once; fail fast with a clean error on any failure."""
+    for name in sorted(os.listdir(data_dir)):
+        if name.startswith("output_"):
+            os.remove(os.path.join(data_dir, name))
+
+    exe_path = os.path.join(data_dir, "DTALite.exe")
+    commands = []
+    if os.path.isfile(exe_path):
+        commands.append([exe_path])  # native launch (Windows)
+        if shutil.which("wine") is not None:
+            commands.append(["wine", exe_path])  # wine fallback (Linux)
+    alt_path = os.path.join(data_dir, "DTALite")
+    if os.path.isfile(alt_path) and os.access(alt_path, os.X_OK):
+        commands.append([alt_path])
+    if not commands:
+        raise ScenarioError(
+            "DTALite executable not found in %s "
+            "(looked for DTALite.exe and DTALite)" % data_dir
+        )
+
+    last_error = None
+    for cmd in commands:
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=data_dir,
+                timeout=timeout,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except OSError as exc:
+            # e.g. Exec format error on Linux -> try the next candidate.
+            last_error = exc
+            continue
+        except subprocess.TimeoutExpired:
+            raise ScenarioError("DTALite timed out after %d seconds" % timeout)
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            raise ScenarioError(
+                "DTALite failed (exit code %d): %s" % (proc.returncode, detail[-2000:])
+            )
+        return
+    raise ScenarioError("could not launch DTALite in %s: %s" % (data_dir, last_error))
+
+
+def write_input_agent(template_path, out_path, agent_col, path_col, paths):
+    """Rewrite the demand template with per-agent paths, byte-identical otherwise.
+
+    The template is re-read with the csv module (not the parsed DataFrame),
+    so the header and row order are preserved exactly; only the path column
+    changes.  paths maps agent_id -> node list; None keeps the template's
+    own path cell untouched.  Fails fast on duplicate agent ids in the
+    template or an agent with no assigned path.
+    """
+    if not os.path.isfile(template_path):
+        raise ScenarioError("demand template not found: %s" % template_path)
+    with open(template_path, "r", newline="") as f:
+        rows = list(csv.reader(f))
+    if not rows:
+        raise ScenarioError("empty demand template: %s" % template_path)
+    header = rows[0]
+    names = [h.strip() for h in header]
+    if agent_col.strip() not in names:
+        raise ScenarioError(
+            "column '%s' not found in %s" % (agent_col, template_path)
+        )
+    if path_col.strip() not in names:
+        raise ScenarioError(
+            "column '%s' not found in %s" % (path_col, template_path)
+        )
+    id_col = names.index(agent_col.strip())
+    path_idx = names.index(path_col.strip())
+    width = len(header)
+
+    seen = set()
+    out_rows = []
+    for row in rows[1:]:
+        if len(row) < width:
+            row = row + [""] * (width - len(row))
+        try:
+            aid = int(float(row[id_col].strip()))
+        except (TypeError, ValueError):
+            raise ScenarioError(
+                "bad agent_id %r in %s" % (row[id_col], template_path)
+            )
+        if aid in seen:
+            raise ScenarioError(
+                "duplicate agent_id %d in %s" % (aid, template_path)
+            )
+        seen.add(aid)
+        if aid not in paths:
+            raise ScenarioError("no route assigned for agent_id %d" % aid)
+        nodes = paths[aid]
+        if nodes is not None:
+            row[path_idx] = ";".join(str(n) for n in nodes) + ";"
+        out_rows.append(row[:width])
+
+    with open(out_path, "w", newline="") as f:
+        writer = csv.writer(f, lineterminator="\r\n")
+        writer.writerow(header)
+        writer.writerows(out_rows)
+
+
+# ---------------------------------------------------------------------------
+# X_{m-1} construction and reactive assignment
+# ---------------------------------------------------------------------------
+
+def build_interval_link_times(tdmoe_df, sigma):
+    """Mean travel time per directed link per departure-time interval.
+
+    Returns dict interval_key -> {(from, to): mean minutes}, where
+    interval_key = floor(timestamp_in_min / sigma).  X_{m-1} for agents in
+    interval m is table[m - 1], i.e. rows with
+    (m-1)*sigma <= timestamp < m*sigma (left-closed, right-open).
+    """
+    df = tdmoe_df.copy()
+    df["from_node_id"] = pd.to_numeric(df["from_node_id"], errors="coerce")
+    df["to_node_id"] = pd.to_numeric(df["to_node_id"], errors="coerce")
+    df["timestamp_in_min"] = pd.to_numeric(df["timestamp_in_min"], errors="coerce")
+    df["travel_time_in_min"] = pd.to_numeric(df["travel_time_in_min"], errors="coerce")
+    df = df.dropna(
+        subset=["from_node_id", "to_node_id", "timestamp_in_min", "travel_time_in_min"]
+    )
+    if df.empty:
+        return {}
+    df["from_node_id"] = df["from_node_id"].astype(int)
+    df["to_node_id"] = df["to_node_id"].astype(int)
+    df["interval"] = np.floor(df["timestamp_in_min"].to_numpy() / sigma).astype(int)
+    grouped = df.groupby(["interval", "from_node_id", "to_node_id"])[
+        "travel_time_in_min"
+    ].mean()
+    table = {}
+    for (m, f, t), value in grouped.items():
+        table.setdefault(int(m), {})[(int(f), int(t))] = float(value)
+    return table
+
+
+def route_travel_time(links, link_times, free_flow):
+    """Sum of link minutes; links missing from the bin fall back to free-flow."""
     total = 0.0
-    for a, b in zip(nodes[:-1], nodes[1:]):
-        t = times.get((a, b))
-        if t is None:
-            return None
-        total += t
+    for key in links:
+        if key in link_times:
+            total += link_times[key]
+        elif key in free_flow:
+            total += free_flow[key]
+        else:
+            raise ScenarioError(
+                "route uses link %d -> %d which is not in the network" % key
+            )
     return total
 
 
-def format_path(nodes):
-    return ";".join(str(n) for n in nodes) + ";"
+def assign_paths(agents, od_routes, free_flow, interval_table, sigma):
+    """Assign each agent the shortest choice-set route under X_{m-1}.
 
-
-def assign_routes(demand, routes, times, sigma, path_col):
-    """Assign one route per agent, in departure order.
-
-    Returns dict agent_id -> (path string, method) where method is
-    'choiceset' or 'template' (template path kept when the OD is missing, has
-    no choice-set row, or has no valid route).
+    agents carries _agent_id, _od, _departure, interval_m = floor(t / sigma).
+    Returns (paths, stats); paths maps agent_id -> (nodes|None, m), where
+    None keeps the template path and is counted as a missing OD.  The best
+    route is cached per (interval, OD), so each OD is evaluated once per
+    interval rather than once per agent.
     """
-    order = demand.sort_values("departure_time_in_min", kind="mergesort")
-    assigned = {}
-    counts = {"choiceset": 0, "template": 0}
-    skipped = 0
-    for i in order.index:
-        dep = float(demand.at[i, "departure_time_in_min"])
-        m = int(math.floor(dep / sigma))  # departure interval (X_{m-1} ~= X_0)
-        _ = m
-        o_raw = demand.at[i, "from_origin_node_id"]
-        d_raw = demand.at[i, "to_destination_node_id"]
-        best, method = None, "template"
-        if not pd.isna(o_raw) and not pd.isna(d_raw):
-            origin, dest = int(o_raw), int(d_raw)
-            if 1 <= origin <= N_ZONES and 1 <= dest <= N_ZONES:
-                best_cost = None
-                for nodes in routes.get(od_index(origin, dest), []):
-                    c = route_cost(nodes, times)
-                    if c is not None and (best_cost is None or c < best_cost):
-                        best_cost, best = c, nodes
-                if best is not None:
-                    method = "choiceset"
-        if best is None:  # no choice-set route: keep the template's path
-            best = parse_path_string(demand.at[i, path_col])
-            if best is None:
-                skipped += 1
-                continue
-        assigned[int(demand.at[i, "agent_id"])] = (format_path(best), method)
-        counts[method] += 1
-    return assigned, counts, skipped
-
-
-def run_dtalite(run_dir, exe, timeout_s):
-    log("running DTALite: %s (timeout %ds)" % (exe, timeout_s))
-    try:
-        proc = subprocess.run(
-            [exe], cwd=run_dir, timeout=timeout_s,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        )
-    except subprocess.TimeoutExpired:
-        fail("DTALite.exe timed out after %d s" % timeout_s)
-    except OSError as e:
-        fail("could not launch DTALite.exe (%s): %s" % (exe, e))
-    if proc.returncode != 0:
-        tail = (proc.stdout or "").strip().splitlines()[-5:]
-        fail("DTALite.exe exited with code %d\n%s" % (
-            proc.returncode, "\n".join(tail)))
-    log("DTALite finished (exit 0)")
-    out_path = os.path.join(run_dir, "output_agent.csv")
-    if not os.path.isfile(out_path):
-        fail("DTALite did not produce output_agent.csv")
-    return out_path
-
-
-def vehicle_hours(output_agent_path):
-    """Sum of experienced travel time / 60 from DTALite's output_agent.csv."""
-    out = pd.read_csv(output_agent_path)
-    tt_col = next(
-        (c for c in out.columns
-         if "travel_time" in str(c).strip().lower() and "min" in str(c).lower()),
-        None)
-    if tt_col is None:
-        if len(out.columns) > 12:
-            tt_col = out.columns[12]
+    paths = {}
+    n_missing_od = 0
+    n_interval_zero = 0
+    n_empty_bin = 0
+    for m, group in agents.groupby("interval_m", sort=True):
+        m = int(m)
+        if m == 0:
+            # X_{-1} does not exist: use free-flow (historical) times.
+            link_times = {}
+            n_interval_zero += len(group)
         else:
-            fail("could not identify the travel-time column in output_agent.csv")
-    tt = pd.to_numeric(out[tt_col], errors="coerce").dropna()
-    return float(tt.sum()) / 60.0, len(tt)
+            link_times = interval_table.get(m - 1, {})
+            if not link_times:
+                n_empty_bin += len(group)
+        best_for_od = {}
+        for od in group["_od"].unique():
+            routes = od_routes.get(tuple(od))
+            if not routes:
+                best_for_od[tuple(od)] = None
+                continue
+            best = min(
+                routes,
+                key=lambda route: route_travel_time(route[1], link_times, free_flow),
+            )
+            best_for_od[tuple(od)] = best[0]
+        for _, row in group.iterrows():
+            nodes = best_for_od.get(tuple(row["_od"]))
+            if nodes is None:
+                n_missing_od += 1
+            paths[int(row["_agent_id"])] = (nodes, m)
+    stats = {
+        "n_missing_od": n_missing_od,
+        "n_interval_zero": n_interval_zero,
+        "n_empty_bin": n_empty_bin,
+    }
+    return paths, stats
+
+
+# ---------------------------------------------------------------------------
+# Results
+# ---------------------------------------------------------------------------
+
+def read_vehicle_hours(output_agent_path):
+    """Total vehicle-hours from output_agent.csv (sum of travel_time / 60)."""
+    df = read_ragged_csv(output_agent_path, [])
+    tt_col = detect_column(df, ["travel_time_in_min", "travel_time"])
+    minutes = pd.to_numeric(df[tt_col], errors="coerce")
+    if minutes.isna().any():
+        raise ScenarioError("NaN travel times in %s" % output_agent_path)
+    return float(minutes.sum()) / 60.0, len(df)
+
+
+def write_outputs(result_dir, sigma, agents, paths, template_df, meta,
+                  vehicle_hours, n_simulated, stats):
+    """Write realtime_routes.csv and realtime_summary.txt; return key numbers."""
+    os.makedirs(result_dir, exist_ok=True)
+
+    template_paths = template_df.set_index(
+        pd.to_numeric(template_df[meta["agent_col"]]).to_numpy()
+    )[meta["path_col"]]
+    path_strings = {}
+    for agent_id, (nodes, m) in paths.items():
+        if nodes is None:
+            path_strings[agent_id] = str(template_paths.loc[float(agent_id)])
+        else:
+            path_strings[agent_id] = ";".join(str(n) for n in nodes) + ";"
+
+    routes_path = os.path.join(result_dir, "realtime_routes.csv")
+    with open(routes_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["agent_id", "path_node_sequence", "sigma_min", "interval_m"])
+        for agent_id in sorted(path_strings):
+            writer.writerow(
+                [agent_id, path_strings[agent_id], sigma, paths[agent_id][1]]
+            )
+
+    target = TARGET_VEHICLE_HOURS[sigma]
+    target_per_agent_min = target / TARGET_N_AGENTS * 60.0
+    mine_per_agent_min = vehicle_hours / n_simulated * 60.0
+    pct_diff = (
+        (mine_per_agent_min - target_per_agent_min) / target_per_agent_min * 100.0
+    )
+
+    summary_path = os.path.join(result_dir, "realtime_summary.txt")
+    with open(summary_path, "w", newline="") as f:
+        f.write("Travel-time-based real-time route guidance baseline\n")
+        f.write("Bingrong Sun (2018), PhD dissertation, Chapter 4\n")
+        f.write("\n")
+        f.write("sigma (information update interval): %d minute(s)\n" % sigma)
+        f.write("agents in demand file: %d\n" % len(agents))
+        f.write("agents simulated by DTALite: %d\n" % n_simulated)
+        f.write(
+            "agents using free-flow info (interval m = 0): %d\n"
+            % stats["n_interval_zero"]
+        )
+        f.write(
+            "agents with empty X_{m-1} bin (fell back to free-flow): %d\n"
+            % stats["n_empty_bin"]
+        )
+        f.write(
+            "agents with no valid OD in choice set (kept template path): %d\n"
+            % stats["n_missing_od"]
+        )
+        f.write("\n")
+        f.write("total travel time: %.2f vehicle-hours\n" % vehicle_hours)
+        f.write("per-agent travel time: %.2f min/agent\n" % mine_per_agent_min)
+        f.write("\n")
+        f.write(
+            "Bingrong (2018) target: %.1f vehicle-hours over %d agents\n"
+            % (target, TARGET_N_AGENTS)
+        )
+        f.write("target per-agent travel time: %.2f min/agent\n" % target_per_agent_min)
+        f.write("difference vs target (per-agent): %+.1f%%\n" % pct_diff)
+    return routes_path, summary_path, mine_per_agent_min, pct_diff
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Real-time route guidance baselines (sigma = 1 or 10 min)."
+    )
+    parser.add_argument(
+        "--sigma",
+        type=int,
+        required=True,
+        choices=(1, 10),
+        help="information update interval in minutes (Test 2 = 1, Test 3 = 10)",
+    )
+    parser.add_argument(
+        "--data-dir",
+        default="DTALite_Files",
+        help="directory with the network, demand, choice set, and DTALite.exe",
+    )
+    parser.add_argument(
+        "--result-dir",
+        default=None,
+        help="output directory (default: ./results_realtime_<sigma>min)",
+    )
+    return parser.parse_args(argv)
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(
-        description="Real-time guidance baselines (Tests 2/3): shortest-travel-time "
-                    "routing on free-flow conditions, single pass, one DTALite run.")
-    ap.add_argument("--sigma", type=int, choices=[1, 10], required=True,
-                    help="update interval in minutes: 1 (Test 2) or 10 (Test 3)")
-    ap.add_argument("--result-dir", default=None,
-                    help="output folder (default results/realtime_<sigma>)")
-    ap.add_argument("--data-dir", default=None,
-                    help="folder holding DTALite_Files contents (default: auto-detect)")
-    ap.add_argument("--exe", default=None,
-                    help="DTALite executable (default: <data-dir>/DTALite.exe)")
-    ap.add_argument("--timeout", type=int, default=3600,
-                    help="DTALite.exe timeout in seconds (default 3600)")
-    args = ap.parse_args(argv)
-
+    args = parse_args(argv)
     sigma = args.sigma
-    data_dir = find_data_dir(args.data_dir)
-    result_dir = (os.path.abspath(args.result_dir) if args.result_dir
-                  else os.path.abspath(
-                      os.path.join("results", "realtime_%d" % sigma)))
-    os.makedirs(result_dir, exist_ok=True)
-    log("sigma=%d min, data dir=%s, result dir=%s" % (sigma, data_dir, result_dir))
+    data_dir = args.data_dir
+    result_dir = args.result_dir or "results_realtime_%dmin" % sigma
 
-    mat_path = os.path.join(data_dir, "choice set no overlap try.mat")
-    if not os.path.isfile(mat_path):
-        fail("choice set not found: %s" % mat_path)
-    routes = load_choice_set(mat_path)
-    grid_bad = validate_od_grid(routes)
-    if grid_bad:
-        fail("%d choice-set rows disagree with the OD grid" % grid_bad)
+    if not os.path.isdir(data_dir):
+        raise ScenarioError("data directory not found: %s" % data_dir)
 
-    xlsx_path = os.path.join(data_dir, "SiouxFalls_net.xlsx")
-    if not os.path.isfile(xlsx_path):
-        fail("network file not found: %s" % xlsx_path)
-    times = load_freeflow_times(xlsx_path)
+    print("sigma = %d min; data dir: %s" % (sigma, data_dir))
 
-    template = os.path.join(data_dir, "input_agent_initial.csv")
-    if not os.path.isfile(template):
-        fail("demand template not found: %s" % template)
-    demand = pd.read_csv(template)
-    required = {"agent_id", "from_origin_node_id",
-                "to_destination_node_id", "departure_time_in_min"}
-    missing = required - set(demand.columns)
-    if missing:
-        fail("demand file missing columns: %s" % sorted(missing))
-    for col in ("agent_id", "departure_time_in_min"):
-        if demand[col].isna().any():
-            fail("demand file has missing values in column '%s'" % col)
-    path_col = next((c for c in demand.columns
-                     if str(c).strip() == "path_node_sequence"), None)
-    if path_col is None:
-        fail("template has no path_node_sequence column")
-    log("demand: %d agents, departures %.1f-%.1f min" % (
-        len(demand), demand["departure_time_in_min"].min(),
-        demand["departure_time_in_min"].max()))
+    free_flow = read_free_flow_times(os.path.join(data_dir, "SiouxFalls_net.xlsx"))
+    print("network: %d directed links" % len(free_flow))
 
-    log("assigning routes (free-flow X_0 for every interval) ...")
-    assigned, counts, skipped = assign_routes(demand, routes, times, sigma, path_col)
-    log("assigned: %d via choice set, %d kept template path (skipped, no valid path: %d)"
-        % (counts["choiceset"], counts["template"], skipped))
+    template_path = os.path.join(data_dir, "input_agent_initial.csv")
+    template_df, meta = read_demand(template_path)
+    print("demand: %d agents" % len(template_df))
 
-    # --- input_agent.csv: template columns preserved, row order kept ---
-    paths = demand["agent_id"].map(
-        lambda a: assigned.get(int(a), (None, None))[0])
-    demand[path_col] = paths.fillna(demand[path_col])
-    agent_csv = os.path.join(data_dir, "input_agent.csv")
-    demand.to_csv(agent_csv, index=False, lineterminator="\r\n")
-    log("wrote %s (%d rows)" % (agent_csv, len(demand)))
+    od_routes = read_choice_set(
+        os.path.join(data_dir, "choice set no overlap try.mat")
+    )
+    print("choice set: %d ODs" % len(od_routes))
 
-    # --- run DTALite once (cwd = data dir: DTALite reads input_agent.csv there) ---
-    exe = args.exe if args.exe else os.path.join(data_dir, "DTALite.exe")
-    output_agent_path = run_dtalite(data_dir, exe, args.timeout)
+    agents = template_df.sort_values("_departure").reset_index(drop=True)
+    agents["interval_m"] = np.floor(
+        agents["_departure"].to_numpy() / sigma
+    ).astype(int)
 
-    # --- realtime_routes.csv: agent_id, path_node_sequence, sigma_min ---
-    routes_rows = [
-        {"agent_id": agent_id,
-         "path_node_sequence": path,
-         "sigma_min": sigma}
-        for agent_id, (path, _) in sorted(assigned.items())
-    ]
-    routes_path = os.path.join(result_dir, "realtime_routes.csv")
-    pd.DataFrame(routes_rows,
-                 columns=["agent_id", "path_node_sequence", "sigma_min"]
-                 ).to_csv(routes_path, index=False, lineterminator="\r\n")
-    log("wrote %s (%d rows)" % (routes_path, len(routes_rows)))
+    input_agent_path = os.path.join(data_dir, "input_agent.csv")
 
-    # --- vehicle-hours vs Bingrong's target ---
-    vh, n_tt = vehicle_hours(output_agent_path)
-    target = TARGET_VH[sigma]
-    diff = 100.0 * (vh - target) / target
-    summary_lines = [
-        "Real-time guidance baseline (Test %s), sigma = %d min"
-        % ("2" if sigma == 1 else "3", sigma),
-        "agents assigned: %d (choice set %d, template-path fallback %d; skipped %d)"
-        % (len(assigned), counts["choiceset"], counts["template"], skipped),
-        "DTALite run: single pass, input_agent.csv (%d rows)" % len(demand),
-        "",
-        "vehicle-hours (sum of agent travel times / 60): %.1f (%d agents)"
-        % (vh, n_tt),
-        "target (Sun 2018, Ch.4): %.1f" % target,
-        "difference: %+.1f%%" % diff,
-        "",
-        "single-pass reactive assignment on free-flow X_0 for all intervals;",
-        "shortest travel time route per agent; sigma_min recorded per agent in",
-        "realtime_routes.csv (agent_id, path_node_sequence, sigma_min).",
-    ]
-    summary_path = os.path.join(result_dir, "realtime_summary.txt")
-    with open(summary_path, "w", newline="") as f:
-        f.write("\r\n".join(summary_lines) + "\r\n")
-    log("wrote %s" % summary_path)
-    log("vehicle-hours: %.1f vs target %.1f (%+.1f%%)" % (vh, target, diff))
-    log("done")
+    # Step 1: free-flow assignment -> DTALite -> observed link times.
+    ff_paths, ff_stats = assign_paths(agents, od_routes, free_flow, {}, sigma)
+    print(
+        "step 1: free-flow assignment "
+        "(%d agents without a valid OD)" % ff_stats["n_missing_od"]
+    )
+    write_input_agent(
+        template_path, input_agent_path, meta["agent_col"], meta["path_col"],
+        {a: p[0] for a, p in ff_paths.items()},
+    )
+    print("step 1: running DTALite ...")
+    run_dtalite(data_dir)
+
+    tdmoe_path = os.path.join(data_dir, "output_LinkTDMOE.csv")
+    tdmoe = read_ragged_csv(
+        tdmoe_path,
+        ["from_node_id", "to_node_id", "timestamp_in_min", "travel_time_in_min"],
+    )
+    if len(tdmoe) == 0:
+        raise ScenarioError(
+            "no link-time rows in %s; DTALite produced no observations" % tdmoe_path
+        )
+    interval_table = build_interval_link_times(tdmoe, sigma)
+    print(
+        "step 1: LinkTDMOE parsed (%d rows, %d intervals with data)"
+        % (len(tdmoe), len(interval_table))
+    )
+
+    # Step 2: reactive assignment under X_{m-1} -> DTALite once.
+    rt_paths, rt_stats = assign_paths(
+        agents, od_routes, free_flow, interval_table, sigma
+    )
+    print(
+        "step 2: reactive assignment (m=0: %d, empty X bin: %d, no valid OD: %d)"
+        % (
+            rt_stats["n_interval_zero"],
+            rt_stats["n_empty_bin"],
+            rt_stats["n_missing_od"],
+        )
+    )
+    write_input_agent(
+        template_path, input_agent_path, meta["agent_col"], meta["path_col"],
+        {a: p[0] for a, p in rt_paths.items()},
+    )
+    print("step 2: running DTALite ...")
+    run_dtalite(data_dir)
+
+    vehicle_hours, n_simulated = read_vehicle_hours(
+        os.path.join(data_dir, "output_agent.csv")
+    )
+    routes_path, summary_path, per_agent_min, pct_diff = write_outputs(
+        result_dir, sigma, agents, rt_paths, template_df, meta,
+        vehicle_hours, n_simulated, rt_stats,
+    )
+    print(
+        "total travel time: %.2f vehicle-hours (%.2f min/agent)"
+        % (vehicle_hours, per_agent_min)
+    )
+    print("vs Bingrong (2018) target (per-agent): %+.1f%%" % pct_diff)
+    print("wrote %s" % routes_path)
+    print("wrote %s" % summary_path)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ScenarioError as exc:
+        print("Error: %s" % exc, file=sys.stderr)
+        sys.exit(1)
