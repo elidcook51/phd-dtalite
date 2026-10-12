@@ -3,6 +3,7 @@
 *.mat
 *.xlsx
 *.txt
+*.md
 
 # Python
 __pycache__/
