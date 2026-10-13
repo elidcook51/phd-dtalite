@@ -37,8 +37,9 @@ sigma=10 -> 28,039.6 vehicle-hours.  This repo's demand has ~36k agents,
 so the summary compares per-agent travel times.
 
 Usage:
-    python scenarios_realtime.py --sigma 1 --result-dir results/realtime_1
-    python scenarios_realtime.py --sigma 10 --data-dir DTALite_Files
+    python scenarios_realtime.py --sigma 1 --data-dir <sandbox> \
+        --result-dir results/realtime_1
+    python scenarios_realtime.py --sigma 10 --data-dir <sandbox>
 """
 
 from __future__ import annotations
@@ -545,17 +546,22 @@ def parse_args(argv=None):
         choices=(1, 10),
         help="information update interval in minutes (Test 2 = 1, Test 3 = 10)",
     )
+    # DTALite_Files/ is read-only: every run must point --data-dir at a
+    # writable sandbox copy. No default on purpose -- see the guard below.
     parser.add_argument(
         "--data-dir",
-        default="DTALite_Files",
-        help="directory with the network, demand, choice set, and DTALite.exe",
+        default=None,
+        help="writable sandbox copy of the DTALite inputs; REQUIRED",
     )
     parser.add_argument(
         "--result-dir",
         default=None,
         help="output directory (default: ./results_realtime_<sigma>min)",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if not args.data_dir:
+        parser.error("--data-dir is required: pass a writable sandbox copy of the DTALite inputs (DTALite_Files/ is read-only)")
+    return args
 
 
 def main(argv=None):

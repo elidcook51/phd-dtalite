@@ -48,7 +48,7 @@ Merge notes (validator's verdict):
   does not hold the expected 576 OD rows.
 
 Usage:
-  python winner_ue.py [--data-dir DTALite_Files] [--result-dir results/ue_baseline]
+  python winner_ue.py --data-dir <sandbox> [--result-dir results/ue_baseline]
                      [--seed 42] [--max-iters 50] [--gap-threshold 0.0001]
                      [--choice-mat ...] [--demand-csv ...] [--network-xlsx ...]
                      [--exe ...] [--timeout 3600]
@@ -391,7 +391,10 @@ def vehicle_hours(data_dir, refreshed, log):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Test 4: MSA for Dynamic User Equilibrium")
     script_dir = Path(__file__).resolve().parent
-    parser.add_argument("--data-dir", default=str(script_dir / "DTALite_Files"))
+    # DTALite_Files/ is read-only: every run must point --data-dir at a
+    # writable sandbox copy. No default on purpose -- see the guard below.
+    parser.add_argument("--data-dir", default=None,
+                        help="writable sandbox copy of the DTALite inputs; REQUIRED")
     parser.add_argument("--result-dir", default=str(script_dir / "results" / "ue_baseline"))
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-iters", type=int, default=50)
@@ -403,6 +406,8 @@ def main(argv=None):
     parser.add_argument("--timeout", type=int, default=3600,
                         help="seconds to wait for one DTALite run")
     args = parser.parse_args(argv)
+    if not args.data_dir:
+        parser.error("--data-dir is required: pass a writable sandbox copy of the DTALite inputs (DTALite_Files/ is read-only)")
 
     data_dir = Path(args.data_dir)
     result_dir = Path(args.result_dir)

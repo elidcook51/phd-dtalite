@@ -54,7 +54,7 @@ Bingrong's satisfaction targets (Sun 2018, Ch.4):
 
 Usage:
   python preference_reaction.py --guidance-csv results_ue/ue_routes.csv \
-      --data-dir DTALite_Files --result-dir results_reaction_ue \
+      --data-dir <sandbox> --result-dir results_reaction_ue \
       --test-name "Test 4 (UE)" --target-satisfaction 66.54
 
 Python 3.9, stdlib + numpy + pandas + scipy (+ openpyxl for xlsx).
@@ -622,8 +622,10 @@ def parse_args(argv):
     p.add_argument("--guidance-csv", required=True,
                    help="ue_routes.csv or realtime_routes.csv "
                         "(agent_id, path_node_sequence[, ...])")
-    p.add_argument("--data-dir", default="DTALite_Files",
-                   help="network, demand, choice set, DTALite executable")
+    # DTALite_Files/ is read-only: every run must point --data-dir at a
+    # writable sandbox copy. No default on purpose -- see the guard below.
+    p.add_argument("--data-dir", default=None,
+                   help="writable sandbox copy of the DTALite inputs; REQUIRED")
     p.add_argument("--result-dir", required=True,
                    help="output directory for actual_routes.csv and "
                         "reaction_summary.txt")
@@ -636,7 +638,10 @@ def parse_args(argv):
                         "(default: auto-detect in <data-dir>)")
     p.add_argument("--timeout", type=int, default=3600,
                    help="seconds to wait for DTALite (default 3600)")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if not args.data_dir:
+        p.error("--data-dir is required: pass a writable sandbox copy of the DTALite inputs (DTALite_Files/ is read-only)")
+    return args
 
 
 def main(argv=None):
