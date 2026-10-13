@@ -20,11 +20,14 @@ run.log. Use --no-progress to disable the display (e.g. when redirecting
 output to a file).
 
 Usage:
-  # All four tests in parallel (Test 1 is a long v9 run):
+  # All four tests in parallel (Test 1 = bigloop 10, 100% MPR):
   python wholerunner.py --data-dir DTALite_Files --results-dir results
 
   # Baselines only (Tests 2-4), the common case:
   python wholerunner.py --data-dir DTALite_Files --results-dir results --skip-test1
+
+  # Test 1 as the full MPR sweep (all 11 bigloops, Test 5):
+  python wholerunner.py --test1-mode sweep --tests 1
 
   # Only specific tests:
   python wholerunner.py --data-dir DTALite_Files --results-dir results --tests 2,3
@@ -114,8 +117,9 @@ T1_KINDS = ("agent", "LinkMOE", "LinkTDMOE")
 T1_TAGS = ("UOinfor", "predict", "actual")
 TAG_RE = re.compile(r"^(\d+)(UOinfor|predict|actual)_agent\.csv$")
 
-# Test 1 runs 18 bigloops in the v9 pipeline.
-T1_BIGLOOPS = 18
+# Test 1: the v9 pipeline runs N bigloops in parallel (default 11),
+# each doing M MSA iterations (default 18). The progress parser
+# tracks total iterations completed across all bigloops (N*M).
 # Test 4 MSA iteration cap (matches scenarios_ue.py --max-iters default).
 T4_MAX_ITERS = 50
 
@@ -175,14 +179,70 @@ _BIGLOOP_RE = re.compile(r"bigloop\s+(\d+)", re.IGNORECASE)
 _PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
 _ITER_RE = re.compile(r"\biter\s+(\d+)", re.IGNORECASE)
 _GAP_RE = re.compile(r"gap=([0-9.eE+-]+)")
+# Test 1 (v9): "Launching 11 MSA iterations in parallel (workers=auto)."
+_T1_LAUNCH_RE = re.compile(r"launching\s+(\d+)\s+msa\s+iterations",
+                           re.IGNORECASE)
+# Test 1 (v9): per-bigloop tqdm lines, e.g.
+# "Bigloop 3 itr 12/18: :  60%|██████    | 12/20 [05:23<03:41]".
+_T1_ITR_RE = re.compile(r"bigloop\s+(\d+)\s+itr\s+(\d+)\s*/\s*(\d+)",
+                        re.IGNORECASE)
+
+# Test 1 progress state: per-bigloop high-water iteration marks plus the
+# run dimensions parsed from the log. Only the test-1 worker thread ever
+# touches these (the executor runs one thread per test), so no lock needed.
+_T1_ITERS = {}
+_T1_N_BIGLOOPS = 11  # default; parsed from "Launching N MSA iterations"
+_T1_ITERS_PER = 18   # default; parsed from the "itr Y/18" denominator
+
+
+def _t1_reset(n_bigloops):
+    global _T1_N_BIGLOOPS, _T1_ITERS_PER
+    _T1_ITERS.clear()
+    _T1_N_BIGLOOPS = max(1, n_bigloops)
+    _T1_ITERS_PER = 18
 
 
 def parse_test1_line(line, tracker):
+    global _T1_ITERS_PER
+    m = _T1_LAUNCH_RE.search(line)
+    if m:
+        try:
+            _t1_reset(int(m.group(1)))
+        except ValueError:
+            _t1_reset(11)
+        tracker.update(1, None,
+                       "launching %d bigloops" % _T1_N_BIGLOOPS)
+        return True
+    m = _T1_ITR_RE.search(line)
+    if m:
+        try:
+            b = int(m.group(1))
+            it = int(m.group(2))
+            per = int(m.group(3))
+        except ValueError:
+            return False
+        if per > 0:
+            _T1_ITERS_PER = per
+        cur = _T1_ITERS.get(b, 0)
+        if it > cur:
+            _T1_ITERS[b] = it
+            cur = it
+        total = sum(_T1_ITERS.values())
+        grand = _T1_N_BIGLOOPS * _T1_ITERS_PER
+        frac = (total / grand) if grand > 0 else 0.0
+        tracker.update(1, frac,
+                       "iter %d/%d (bigloop %d: %d/%d)"
+                       % (total, grand, b, cur, _T1_ITERS_PER))
+        return True
+    # Legacy fallback: a bare "bigloop N" with no iteration info.
     m = _BIGLOOP_RE.search(line)
     if m:
-        n = int(m.group(1))
-        tracker.update(1, n / T1_BIGLOOPS,
-                       "bigloop %d/%d" % (n, T1_BIGLOOPS))
+        try:
+            n = int(m.group(1))
+        except ValueError:
+            return False
+        tracker.update(1, n / _T1_N_BIGLOOPS,
+                       "bigloop %d/%d" % (n, _T1_N_BIGLOOPS))
         return True
     m = _PCT_RE.search(line)
     if m:
@@ -382,12 +442,20 @@ def setup_sandbox(test, data_dir, temp_root):
 # ----------------------------------------------------------------------
 # Per-test command lines
 # ----------------------------------------------------------------------
-def test1_commands(sandbox, seed):
-    return [
-        ([PY, os.path.join(sandbox, "runner_parallel.py"),
-          "--seed", str(seed)],
-         "v9 pipeline (runner_parallel.py)"),
-    ]
+def test1_commands(sandbox, seed, test1_mode="single"):
+    """Test 1 command lines.
+
+    test1_mode="single": bigloop 10 only (100% MPR, the Test 1 case).
+    test1_mode="sweep":  all 11 bigloops (the Test 5 MPR sweep).
+    """
+    cmd = [PY, os.path.join(sandbox, "runner_parallel.py"),
+           "--seed", str(seed)]
+    if test1_mode == "single":
+        cmd += ["--bigloops", "10"]
+        desc = "v9 pipeline (runner_parallel.py --bigloops 10)"
+    else:
+        desc = "v9 pipeline (runner_parallel.py --bigloops 0-10, MPR sweep)"
+    return [(cmd, desc)]
 
 
 def test24_commands(test, sandbox, seed):
@@ -423,7 +491,7 @@ def test24_commands(test, sandbox, seed):
 # ----------------------------------------------------------------------
 # Test execution (one thread per test; each launches its own processes)
 # ----------------------------------------------------------------------
-def run_test(test, sandbox, tracker=None, seed=42):
+def run_test(test, sandbox, tracker=None, seed=42, test1_mode="single"):
     """Run one test's command sequence inside its sandbox. Subprocess
     stdout is captured via PIPE: every line is appended to run.log and
     parsed for progress markers (when tracker is given). Returns
@@ -431,7 +499,7 @@ def run_test(test, sandbox, tracker=None, seed=42):
     cfg = TESTS[test]
     log_path = os.path.join(sandbox, "run.log")
     if test == 1:
-        cmds = test1_commands(sandbox, seed)
+        cmds = test1_commands(sandbox, seed, test1_mode)
     else:
         cmds = test24_commands(test, sandbox, seed)
 
@@ -739,6 +807,11 @@ def parse_args(argv=None):
     ap.add_argument("--seed", type=int, default=42,
                     help="random seed for all tests (Tests 2-4 and "
                          "Test 1 via runner_parallel.py; default: 42)")
+    ap.add_argument('--test1-mode', choices=['single', 'sweep'],
+                    default='single',
+                    help='Test 1 bigloops: single = bigloop 10 only '
+                         '(100pct MPR, Test 1); sweep = all 11 bigloops '
+                         '(Test 5 MPR sweep). Default: single.')
     return ap.parse_args(argv)
 
 
@@ -787,6 +860,11 @@ def main(argv=None):
 
     log("Tests: %s (max_workers=%d)" % (tests, max_workers))
     log("Seed: %d (all tests)" % args.seed)
+    if 1 in tests:
+        log("Test 1 mode: %s (%s)" % (
+            args.test1_mode,
+            "bigloop 10 only" if args.test1_mode == "single"
+            else "all 11 bigloops (MPR sweep)"))
     log("Data dir: %s (read-only)" % data_dir)
     log("Results dir: %s" % results_root)
     log("Temp root: %s" % temp_root)
@@ -819,7 +897,7 @@ def main(argv=None):
         with concurrent.futures.ThreadPoolExecutor(
                 max_workers=max_workers) as ex:
             futures = {ex.submit(run_test, t, sandboxes[t], tracker,
-                               args.seed): t
+                               args.seed, args.test1_mode): t
                        for t in tests}
             for fut in concurrent.futures.as_completed(futures):
                 t = futures[fut]
