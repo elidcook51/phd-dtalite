@@ -217,7 +217,7 @@ def _sandbox_cwd(run_dir):
 
 def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
                  repo_root=None, keep_on_failure=True, cleanup=True,
-                 msa_fn=None):
+                 msa_fn=None, seed=1):
     """
     Parallel-safe version of ``msa.msa``.
 
@@ -239,6 +239,7 @@ def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
         method) monkeypatching ``msa.msa`` does not propagate into worker
         processes, so pass the fake explicitly.  Must be a top-level
         function to survive pickling to the workers.
+    seed : RNG seed for ``dividerand`` (user-type assignment). Default: 1.
     """
     run_id = bigloop if run_id is None else run_id
     repo_root = os.path.abspath(repo_root or os.getcwd())
@@ -252,8 +253,10 @@ def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
                 os.path.join(SOURCE_DIR, "input_agent_initial.csv"),
                 os.path.join(SOURCE_DIR, "input_agent.csv"),
             )
-            (msa_fn if msa_fn is not None else _msa_mod.msa)(
-                bigloop, p, p_fix, p_realtime)
+            if msa_fn is not None:
+                msa_fn(bigloop, p, p_fix, p_realtime)
+            else:
+                _msa_mod.msa(bigloop, p, p_fix, p_realtime, seed=seed)
 
         copied = collect_results(run_dir, bigloop, dest_dir=dest_dir)
     except Exception:
@@ -393,7 +396,7 @@ def _msa_worker(task):
 
 
 def run_parallel_msa(schedule, max_workers=None, repo_root=None,
-                     keep_on_failure=True, msa_fn=None):
+                     keep_on_failure=True, msa_fn=None, seed=1):
     """
     Run many MSA iterations concurrently, one sandbox (``RunX/``) per
     iteration.
@@ -410,6 +413,7 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
     msa_fn : optional ``(bigloop, p, p_fix, p_realtime)`` callable used
         instead of ``msa.msa`` in every worker (testing hook; must be a
         top-level function to survive pickling).
+    seed : RNG seed for ``dividerand`` (user-type assignment). Default: 1.
 
     Returns
     -------
@@ -438,6 +442,7 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
             "keep_on_failure": keep_on_failure,
             "cleanup": False,  # orchestrator harvests shared files first
             "msa_fn": msa_fn,
+            "seed": seed,
         }
         for (bigloop, p, p_fix, p_realtime) in schedule
     ]

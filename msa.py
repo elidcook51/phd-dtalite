@@ -54,11 +54,11 @@ def dividerand_matlab(bigloop):
 
 
 
-def dividerand(driver_ids, p, p_realtime, p_fix):
+def dividerand(driver_ids, p, p_realtime, p_fix, seed=1):
 
 
 
-    rng = np.random.default_rng(seed = 1)
+    rng = np.random.default_rng(seed)
 
 
 
@@ -296,7 +296,7 @@ def parse_path_endpoints(raw_path, row_index=None):
 
 
 
-def msa(bigloop, p, p_fix, p_realtime):
+def msa(bigloop, p, p_fix, p_realtime, seed=1):
 
     start_time = time.time()
 
@@ -322,7 +322,7 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     driver_ids = np.arange(dsize)
 
-    member, realtime_user, fix_user = dividerand(driver_ids, p, p_realtime, p_fix)
+    member, realtime_user, fix_user = dividerand(driver_ids, p, p_realtime, p_fix, seed=seed)
 
     # member, realtime_user, fix_user = dividerand_matlab(bigloop)
 

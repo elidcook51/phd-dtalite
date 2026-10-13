@@ -468,7 +468,7 @@ def read_vehicle_hours(output_agent_path):
 
 
 def write_outputs(result_dir, sigma, agents, paths, template_df, meta,
-                  vehicle_hours, n_simulated, stats):
+                  vehicle_hours, n_simulated, stats, seed):
     """Write realtime_routes.csv and realtime_summary.txt; return key numbers."""
     os.makedirs(result_dir, exist_ok=True)
 
@@ -504,6 +504,7 @@ def write_outputs(result_dir, sigma, agents, paths, template_df, meta,
         f.write("Bingrong Sun (2018), PhD dissertation, Chapter 4\n")
         f.write("\n")
         f.write("sigma (information update interval): %d minute(s)\n" % sigma)
+        f.write("seed: %d (deterministic script; accepted for API parity)\n" % seed)
         f.write("agents in demand file: %d\n" % len(agents))
         f.write("agents simulated by DTALite: %d\n" % n_simulated)
         f.write(
@@ -558,6 +559,13 @@ def parse_args(argv=None):
         default=None,
         help="output directory (default: ./results_realtime_<sigma>min)",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="random seed (accepted for API parity with scenarios_ue.py; "
+             "this script is fully deterministic and ignores it)",
+    )
     args = parser.parse_args(argv)
     if not args.data_dir:
         parser.error("--data-dir is required: pass a writable sandbox copy of the DTALite inputs (DTALite_Files/ is read-only)")
@@ -574,6 +582,8 @@ def main(argv=None):
         raise ScenarioError("data directory not found: %s" % data_dir)
 
     print("sigma = %d min; data dir: %s" % (sigma, data_dir))
+    print("seed = %d (deterministic script; accepted for API parity)"
+          % args.seed)
 
     free_flow = read_free_flow_times(os.path.join(data_dir, "SiouxFalls_net.xlsx"))
     print("network: %d directed links" % len(free_flow))
@@ -646,7 +656,7 @@ def main(argv=None):
     )
     routes_path, summary_path, per_agent_min, pct_diff = write_outputs(
         result_dir, sigma, agents, rt_paths, template_df, meta,
-        vehicle_hours, n_simulated, rt_stats,
+        vehicle_hours, n_simulated, rt_stats, args.seed,
     )
     print(
         "total travel time: %.2f vehicle-hours (%.2f min/agent)"

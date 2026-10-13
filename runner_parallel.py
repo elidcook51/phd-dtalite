@@ -43,6 +43,10 @@ def main():
         "--no-keep-on-failure", action="store_true",
         help="Delete RunX sandboxes even when a run fails.",
     )
+    parser.add_argument(
+        "--seed", type=int, default=1,
+        help="RNG seed for dividerand (user-type assignment). Default: 1.",
+    )
     args = parser.parse_args()
 
     # Run from the repo root so relative paths resolve, wherever the script
@@ -52,7 +56,7 @@ def main():
 
     schedule = runner_schedule(args.iterations)
     print(f"Launching {len(schedule)} MSA iterations in parallel "
-          f"(workers={args.workers or 'auto'}).", flush=True)
+          f"(workers={args.workers or 'auto'}, seed={args.seed}).", flush=True)
 
     start = time.time()
     results = run_parallel_msa(
@@ -60,6 +64,7 @@ def main():
         max_workers=args.workers,
         repo_root=repo_root,
         keep_on_failure=not args.no_keep_on_failure,
+        seed=args.seed,
     )
     elapsed = time.time() - start
 

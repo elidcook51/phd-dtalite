@@ -382,14 +382,15 @@ def setup_sandbox(test, data_dir, temp_root):
 # ----------------------------------------------------------------------
 # Per-test command lines
 # ----------------------------------------------------------------------
-def test1_commands(sandbox):
+def test1_commands(sandbox, seed):
     return [
-        ([PY, os.path.join(sandbox, "runner_parallel.py")],
+        ([PY, os.path.join(sandbox, "runner_parallel.py"),
+          "--seed", str(seed)],
          "v9 pipeline (runner_parallel.py)"),
     ]
 
 
-def test24_commands(test, sandbox):
+def test24_commands(test, sandbox, seed):
     """Guidance scenario followed by the preference-reaction step."""
     staging = os.path.join(sandbox, "staging")
     os.makedirs(staging, exist_ok=True)
@@ -399,12 +400,14 @@ def test24_commands(test, sandbox):
     if test in (2, 3):
         scenario = [PY, os.path.join(sandbox, "scenarios_realtime.py"),
                     "--sigma", str(cfg["sigma"]),
-                    "--data-dir", data, "--result-dir", staging]
+                    "--data-dir", data, "--result-dir", staging,
+                    "--seed", str(seed)]
         scenario_desc = "real-time sigma=%d (guidance)" % cfg["sigma"]
         guidance_csv = os.path.join(staging, "realtime_routes.csv")
     else:  # test 4
         scenario = [PY, os.path.join(sandbox, "scenarios_ue.py"),
-                    "--data-dir", data, "--result-dir", staging]
+                    "--data-dir", data, "--result-dir", staging,
+                    "--seed", str(seed)]
         scenario_desc = "UE baseline (MSA guidance)"
         guidance_csv = os.path.join(staging, "ue_routes.csv")
 
@@ -420,7 +423,7 @@ def test24_commands(test, sandbox):
 # ----------------------------------------------------------------------
 # Test execution (one thread per test; each launches its own processes)
 # ----------------------------------------------------------------------
-def run_test(test, sandbox, tracker=None):
+def run_test(test, sandbox, tracker=None, seed=42):
     """Run one test's command sequence inside its sandbox. Subprocess
     stdout is captured via PIPE: every line is appended to run.log and
     parsed for progress markers (when tracker is given). Returns
@@ -428,9 +431,9 @@ def run_test(test, sandbox, tracker=None):
     cfg = TESTS[test]
     log_path = os.path.join(sandbox, "run.log")
     if test == 1:
-        cmds = test1_commands(sandbox)
+        cmds = test1_commands(sandbox, seed)
     else:
-        cmds = test24_commands(test, sandbox)
+        cmds = test24_commands(test, sandbox, seed)
 
     quiet = tracker is not None
     if tracker:
@@ -733,6 +736,9 @@ def parse_args(argv=None):
                     help="parallel workers (default: min(4, tests selected))")
     ap.add_argument("--no-progress", action="store_true",
                     help="disable the live progress display")
+    ap.add_argument("--seed", type=int, default=42,
+                    help="random seed for all tests (Tests 2-4 and "
+                         "Test 1 via runner_parallel.py; default: 42)")
     return ap.parse_args(argv)
 
 
@@ -780,6 +786,7 @@ def main(argv=None):
     display_thread = None
 
     log("Tests: %s (max_workers=%d)" % (tests, max_workers))
+    log("Seed: %d (all tests)" % args.seed)
     log("Data dir: %s (read-only)" % data_dir)
     log("Results dir: %s" % results_root)
     log("Temp root: %s" % temp_root)
@@ -811,7 +818,8 @@ def main(argv=None):
     try:
         with concurrent.futures.ThreadPoolExecutor(
                 max_workers=max_workers) as ex:
-            futures = {ex.submit(run_test, t, sandboxes[t], tracker): t
+            futures = {ex.submit(run_test, t, sandboxes[t], tracker,
+                               args.seed): t
                        for t in tests}
             for fut in concurrent.futures.as_completed(futures):
                 t = futures[fut]
