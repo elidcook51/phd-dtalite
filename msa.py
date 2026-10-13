@@ -322,9 +322,9 @@ def msa(bigloop, p, p_fix, p_realtime):
 
     driver_ids = np.arange(dsize)
 
-    #member, realtime_user, fix_user = dividerand(driver_ids, p, p_realtime, p_fix)
+    member, realtime_user, fix_user = dividerand(driver_ids, p, p_realtime, p_fix)
 
-    member, realtime_user, fix_user = dividerand_matlab(bigloop)
+    # member, realtime_user, fix_user = dividerand_matlab(bigloop)
 
 
 
