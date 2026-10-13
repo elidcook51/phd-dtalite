@@ -632,6 +632,21 @@ def main(argv=None):
         % (len(tdmoe), len(interval_table))
     )
 
+    # Test 6 (Future Traffic Conditions Estimation): save the Step 1 link
+    # volumes as the "predicted" baseline before Step 2's run_dtalite()
+    # deletes all output_* files.  Step 1's volumes are the historical
+    # conditions the RT system uses to build X_{m-1} guidance.
+    os.makedirs(result_dir, exist_ok=True)
+    predicted_src = os.path.join(data_dir, "output_LinkMOE.csv")
+    if os.path.isfile(predicted_src):
+        shutil.copy(predicted_src,
+                    os.path.join(result_dir, "predicted_LinkMOE.csv"))
+        print("saved predicted link volumes to %s"
+              % os.path.join(result_dir, "predicted_LinkMOE.csv"))
+    else:
+        print("warning: %s not found after Step 1; "
+              "predicted link volumes not saved for Test 6" % predicted_src)
+
     # Step 2: reactive assignment under X_{m-1} -> DTALite once.
     rt_paths, rt_stats = assign_paths(
         agents, od_routes, free_flow, interval_table, sigma

@@ -575,6 +575,22 @@ def _run(args, data_dir, result_dir, log, t_start):
         log("WARNING: gap %.6f still above %.6f after %d iteration(s) (cap reached)"
             % (gap, args.gap_threshold, iters_done))
 
+    # Test 6 (Future Traffic Conditions Estimation): save the final MSA
+    # iteration link volumes as the "predicted" UE condition.  The reaction
+    # phase (preference_reaction.py) will generate the "actual" volumes.
+    # Copy before anything else touches data_dir.
+    for _link_file in ("output_LinkMOE.csv", "output_link.csv",
+                       "output_LinkTDMOE.csv"):
+        _src = data_dir / _link_file
+        if _src.is_file():
+            shutil.copy(str(_src), str(result_dir / "predicted_LinkMOE.csv"))
+            log("saved predicted link volumes to %s"
+                % (result_dir / "predicted_LinkMOE.csv"))
+            break
+    else:
+        log("warning: no link volume file found after MSA; "
+            "predicted volumes not saved for Test 6")
+
     veh_hours, veh_note = vehicle_hours(data_dir, refreshed, log)
     routes_path = result_dir / "ue_routes.csv"
     pd.DataFrame({agent_col: agent_ids,
