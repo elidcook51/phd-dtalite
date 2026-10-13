@@ -13,6 +13,12 @@ DTALite_Files/ (the real one stays read-only) plus the scripts that test
 needs. Tests run concurrently as separate processes -- no shared writable
 state -- and all outputs are collected under <results-dir>/.
 
+While the tests run, a live progress display shows one bar per test,
+refreshed every 2 seconds (main thread). Subprocess stdout is captured via
+PIPE, parsed for progress markers, and also written to each sandbox's
+run.log. Use --no-progress to disable the display (e.g. when redirecting
+output to a file).
+
 Usage:
   # All four tests in parallel (Test 1 is a long v9 run):
   python wholerunner.py --data-dir DTALite_Files --results-dir results
@@ -47,6 +53,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -95,11 +102,22 @@ TESTS = {
 RESULT_NAMES = {1: "proposed", 2: "realtime_1", 3: "realtime_10",
                 4: "ue_baseline"}
 
+# Short labels for the progress display
+DISPLAY_LABELS = {1: "Test 1 (Proposed)",
+                  2: "Test 2 (RT-1min)",
+                  3: "Test 3 (RT-10min)",
+                  4: "Test 4 (UE)"}
+
 # Bigloop result files collected for Test 1: the 9 result CSVs from the
 # parity checker ({b}UOinfor/predict/actual x agent/LinkMOE/LinkTDMOE).
 T1_KINDS = ("agent", "LinkMOE", "LinkTDMOE")
 T1_TAGS = ("UOinfor", "predict", "actual")
 TAG_RE = re.compile(r"^(\d+)(UOinfor|predict|actual)_agent\.csv$")
+
+# Test 1 runs 18 bigloops in the v9 pipeline.
+T1_BIGLOOPS = 18
+# Test 4 MSA iteration cap (matches scenarios_ue.py --max-iters default).
+T4_MAX_ITERS = 50
 
 
 def log(msg):
@@ -108,6 +126,230 @@ def log(msg):
 
 def fmt_min(sec):
     return "%.1f min" % (sec / 60.0)
+
+
+# ----------------------------------------------------------------------
+# Progress tracking (thread-safe; one entry per test)
+# ----------------------------------------------------------------------
+class ProgressTracker:
+    """Thread-safe per-test progress: fraction 0.0-1.0 plus a short
+    status string. Fractions are monotonic (never move backwards)."""
+
+    def __init__(self, tests):
+        self._lock = threading.Lock()
+        self._frac = {t: 0.0 for t in tests}
+        self._status = {t: "starting..." for t in tests}
+        self._done = {t: False for t in tests}
+        self._t0 = {t: None for t in tests}
+
+    def start(self, test):
+        with self._lock:
+            self._t0[test] = time.time()
+            self._status[test] = "starting..."
+
+    def update(self, test, frac, status=None):
+        """frac=None keeps the current fraction (status-only update)."""
+        with self._lock:
+            if frac is not None and frac > self._frac[test]:
+                self._frac[test] = min(frac, 1.0)
+            if status is not None:
+                self._status[test] = status
+
+    def finish(self, test, ok):
+        with self._lock:
+            self._frac[test] = 1.0
+            self._done[test] = True
+            self._status[test] = "done" if ok else "FAILED"
+
+    def snapshot(self):
+        with self._lock:
+            return {t: (self._frac[t], self._status[t],
+                       self._done[t], self._t0[t])
+                    for t in self._frac}
+
+
+# ----------------------------------------------------------------------
+# Progress-line parsers (fuzzy: each returns True if it handled the line)
+# ----------------------------------------------------------------------
+_BIGLOOP_RE = re.compile(r"bigloop\s+(\d+)", re.IGNORECASE)
+_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+_ITER_RE = re.compile(r"\biter\s+(\d+)", re.IGNORECASE)
+_GAP_RE = re.compile(r"gap=([0-9.eE+-]+)")
+
+
+def parse_test1_line(line, tracker):
+    m = _BIGLOOP_RE.search(line)
+    if m:
+        n = int(m.group(1))
+        tracker.update(1, n / T1_BIGLOOPS,
+                       "bigloop %d/%d" % (n, T1_BIGLOOPS))
+        return True
+    m = _PCT_RE.search(line)
+    if m:
+        try:
+            tracker.update(1, float(m.group(1)) / 100.0,
+                           line.strip()[:44])
+            return True
+        except ValueError:
+            pass
+    return False
+
+
+def _parse_reaction_line(test, line, tracker, base):
+    """Shared preference_reaction.py markers. base is where the reaction
+    phase starts (0.50 for tests 2/3, 0.80 for test 4); spans to 1.0."""
+    low = line.lower()
+    span = 1.0 - base
+    if "loading network" in low:
+        tracker.update(test, base + span * 0.10, "reaction: loading data")
+        return True
+    if "tournament run for" in low:
+        tracker.update(test, base + span * 0.40, "reaction: tournament done")
+        return True
+    if "writing" in low and "input_agent" in low:
+        tracker.update(test, base + span * 0.50, "reaction: writing input")
+        return True
+    if "running dtalite" in low:
+        tracker.update(test, base + span * 0.70, "reaction: DTALite")
+        return True
+    if "actual_routes" in low and "wrote" in low:
+        tracker.update(test, base + span * 0.90, "reaction: routes written")
+        return True
+    if "reaction_summary" in low or ("wrote" in low and "summary" in low):
+        tracker.update(test, 1.0, "done")
+        return True
+    if low.strip().startswith("satisfaction:"):
+        tracker.update(test, 1.0, line.strip()[:44])
+        return True
+    return False
+
+
+def parse_test23_line(cmd_idx, line, tracker, test):
+    low = line.lower()
+    if cmd_idx == 0:  # scenarios_realtime.py (guidance), spans 0.0-0.50
+        if "step 1:" in low:
+            if "running dtalite" in low:
+                tracker.update(test, 0.20, "step 1: DTALite baseline")
+            else:
+                tracker.update(test, 0.10, "step 1: free-flow assignment")
+            return True
+        if "step 2:" in low:
+            if "running dtalite" in low:
+                tracker.update(test, 0.40, "step 2: DTALite reactive")
+            else:
+                tracker.update(test, 0.30, "step 2: reactive assignment")
+            return True
+        if "realtime_routes" in low and "wrote" in low:
+            tracker.update(test, 0.50, "guidance complete")
+            return True
+        return False
+    # cmd_idx == 1: preference_reaction.py, spans 0.50-1.0
+    return _parse_reaction_line(test, line, tracker, 0.50)
+
+
+def parse_test4_line(cmd_idx, line, tracker):
+    low = line.lower()
+    if cmd_idx == 0:  # scenarios_ue.py (guidance), spans 0.0-0.80
+        m = _ITER_RE.search(low)
+        if m:
+            n = int(m.group(1))
+            frac = 0.05 + (n / T4_MAX_ITERS) * 0.75
+            status = "iter %d/%d" % (n, T4_MAX_ITERS)
+            gm = _GAP_RE.search(low)
+            if gm:
+                status += " gap=%s" % gm.group(1)
+            tracker.update(4, frac, status)
+            return True
+        if "initial gap" in low:
+            tracker.update(4, 0.05, "MSA starting")
+            return True
+        if "converged" in low:
+            tracker.update(4, 0.80, "MSA converged")
+            return True
+        if "ue_routes" in low and "wrote" in low:
+            tracker.update(4, 0.80, "guidance complete")
+            return True
+        return False
+    # cmd_idx == 1: preference_reaction.py, spans 0.80-1.0
+    return _parse_reaction_line(4, line, tracker, 0.80)
+
+
+def parse_progress_line(test, cmd_idx, line, tracker):
+    """Dispatch one captured stdout line to the right parser."""
+    if tracker is None or not line or not line.strip():
+        return
+    try:
+        if test == 1:
+            parse_test1_line(line, tracker)
+        elif test in (2, 3):
+            parse_test23_line(cmd_idx, line, tracker, test)
+        elif test == 4:
+            parse_test4_line(cmd_idx, line, tracker)
+    except Exception:
+        # Parsing must never break a run; markers are best-effort.
+        pass
+
+
+# ----------------------------------------------------------------------
+# Progress display (main thread; redraws every 2 seconds)
+# ----------------------------------------------------------------------
+def _bar_chars():
+    """Block characters if the console can encode them, else ASCII."""
+    enc = (getattr(sys.stdout, "encoding", None) or "utf-8").lower()
+    try:
+        ("\u2588\u2591").encode(enc)
+        return "\u2588", "\u2591"
+    except (UnicodeEncodeError, LookupError):
+        return "#", "-"
+
+
+_FULL_CH, _EMPTY_CH = _bar_chars()
+
+
+def render_bars(tracker, tests):
+    snap = tracker.snapshot()
+    lines = []
+    for t in tests:
+        frac, status, done, t0 = snap[t]
+        pct = int(frac * 100)
+        filled = int(frac * 20)
+        bar = _FULL_CH * filled + _EMPTY_CH * (20 - filled)
+        if not done and t0 is not None:
+            status = "%s (%s)" % (status, fmt_min(time.time() - t0))
+        lines.append("%-18s [%s] %3d%%  %s"
+                     % (DISPLAY_LABELS.get(t, "Test %d" % t),
+                        bar, pct, status))
+    return lines
+
+
+def display_loop(tracker, tests, stop_event, interval=2.0):
+    """Redraw the progress block until stop_event is set."""
+    n_lines = len(tests) + 1  # bars plus trailing blank line
+    first = True
+    try:
+        while not stop_event.is_set():
+            if not first:
+                sys.stdout.write("\033[%dA" % n_lines)
+            for line in render_bars(tracker, tests):
+                sys.stdout.write("\r\033[K" + line + "\n")
+            sys.stdout.write("\r\033[K\n")
+            sys.stdout.flush()
+            first = False
+            if stop_event.wait(interval):
+                break
+    except Exception:
+        # Display must never break a run (e.g. dumb terminal).
+        pass
+    # Final render so the terminal is left in a clean state.
+    try:
+        if not first:
+            sys.stdout.write("\033[%dA" % n_lines)
+        for line in render_bars(tracker, tests):
+            sys.stdout.write("\r\033[K" + line + "\n")
+        sys.stdout.write("\r\033[K\n")
+        sys.stdout.flush()
+    except Exception:
+        pass
 
 
 # ----------------------------------------------------------------------
@@ -178,9 +420,11 @@ def test24_commands(test, sandbox):
 # ----------------------------------------------------------------------
 # Test execution (one thread per test; each launches its own processes)
 # ----------------------------------------------------------------------
-def run_test(test, sandbox):
-    """Run one test's command sequence inside its sandbox. All output
-    goes to run.log. Returns (ok, elapsed)."""
+def run_test(test, sandbox, tracker=None):
+    """Run one test's command sequence inside its sandbox. Subprocess
+    stdout is captured via PIPE: every line is appended to run.log and
+    parsed for progress markers (when tracker is given). Returns
+    (ok, elapsed)."""
     cfg = TESTS[test]
     log_path = os.path.join(sandbox, "run.log")
     if test == 1:
@@ -188,33 +432,69 @@ def run_test(test, sandbox):
     else:
         cmds = test24_commands(test, sandbox)
 
+    quiet = tracker is not None
+    if tracker:
+        tracker.start(test)
     t0 = time.time()
-    log("%s: started (log: %s)" % (cfg["label"], log_path))
+    if not quiet:
+        log("%s: started (log: %s)" % (cfg["label"], log_path))
+    else:
+        tracker.update(test, 0.0, "starting...")
     try:
-        with open(log_path, "wb") as logfh:
-            for cmd, desc in cmds:
+        with open(log_path, "w", encoding="utf-8", errors="replace") as logfh:
+            for cmd_idx, (cmd, desc) in enumerate(cmds):
                 step0 = time.time()
-                log("%s: %s ..." % (cfg["label"], desc))
-                proc = subprocess.Popen(cmd, cwd=sandbox,
-                                        stdout=logfh, stderr=subprocess.STDOUT)
-                last_note = time.time()
-                while proc.poll() is None:
-                    time.sleep(10)
-                    if time.time() - last_note >= 600:
-                        log("%s: %s still running (%s elapsed)" %
-                            (cfg["label"], desc, fmt_min(time.time() - t0)))
-                        last_note = time.time()
+                if not quiet:
+                    log("%s: %s ..." % (cfg["label"], desc))
+                else:
+                    tracker.update(test, None, desc)
+                proc = subprocess.Popen(
+                    cmd, cwd=sandbox,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1, errors="replace")
+                while True:
+                    line = proc.stdout.readline()
+                    if line:
+                        logfh.write(line)
+                        parse_progress_line(test, cmd_idx, line, tracker)
+                    elif proc.poll() is not None:
+                        break
+                    else:
+                        time.sleep(0.05)
+                # Drain anything left in the pipe after exit.
+                try:
+                    rest = proc.stdout.read()
+                except Exception:
+                    rest = ""
+                if rest:
+                    logfh.write(rest)
+                    for rline in rest.splitlines():
+                        parse_progress_line(test, cmd_idx, rline, tracker)
+                logfh.flush()
+                try:
+                    proc.stdout.close()
+                except Exception:
+                    pass
                 if proc.returncode != 0:
+                    if tracker:
+                        tracker.finish(test, False)
                     log("%s: FAILED at '%s' (rc=%d); sandbox kept: %s" %
                         (cfg["label"], desc, proc.returncode, sandbox))
                     return False, time.time() - t0
-                log("%s: %s done (%s)" %
-                    (cfg["label"], desc, fmt_min(time.time() - step0)))
+                if not quiet:
+                    log("%s: %s done (%s)" %
+                        (cfg["label"], desc, fmt_min(time.time() - step0)))
+        # All commands succeeded; make sure the bar reaches 100%.
+        if tracker:
+            tracker.finish(test, True)
     except OSError as e:
+        if tracker:
+            tracker.finish(test, False)
         log("%s: could not launch process: %s" % (cfg["label"], e))
         return False, time.time() - t0
     dt = time.time() - t0
-    log("%s: finished (%s)" % (cfg["label"], fmt_min(dt)))
+    if not quiet:
+        log("%s: finished (%s)" % (cfg["label"], fmt_min(dt)))
     return True, dt
 
 
@@ -451,6 +731,8 @@ def parse_args(argv=None):
                     help="keep temp/run_<pid>/test_<N>/ sandboxes after success")
     ap.add_argument("--max-workers", type=int, default=None,
                     help="parallel workers (default: min(4, tests selected))")
+    ap.add_argument("--no-progress", action="store_true",
+                    help="disable the live progress display")
     return ap.parse_args(argv)
 
 
@@ -490,10 +772,26 @@ def main(argv=None):
         print("ERROR: --max-workers must be >= 1", file=sys.stderr)
         sys.exit(2)
     max_workers = args.max_workers or min(4, len(tests))
+
+    # Live progress display unless disabled or stdout is not a terminal.
+    use_progress = (not args.no_progress) and sys.stdout.isatty()
+    tracker = ProgressTracker(tests) if use_progress else None
+    stop_event = threading.Event()
+    display_thread = None
+
     log("Tests: %s (max_workers=%d)" % (tests, max_workers))
     log("Data dir: %s (read-only)" % data_dir)
     log("Results dir: %s" % results_root)
     log("Temp root: %s" % temp_root)
+    if use_progress:
+        log("Live progress display enabled (refresh every 2s)")
+        # Print a blank block so the first redraw has room to move up.
+        display_thread = threading.Thread(
+            target=display_loop, args=(tracker, tests, stop_event),
+            daemon=True)
+        display_thread.start()
+    elif not args.no_progress:
+        log("Progress display disabled (stdout is not a terminal)")
 
     # Sandbox setup -- fail fast: any setup error aborts before anything runs.
     sandboxes = {}
@@ -503,21 +801,32 @@ def main(argv=None):
         except Exception as e:
             print("ERROR: sandbox setup failed for test %d: %s"
                   % (t, e), file=sys.stderr)
+            if display_thread:
+                stop_event.set()
+                display_thread.join(timeout=5)
             sys.exit(1)
 
     t_start = time.time()
     outcomes = {}
-    with concurrent.futures.ThreadPoolExecutor(
-            max_workers=max_workers) as ex:
-        futures = {ex.submit(run_test, t, sandboxes[t]): t for t in tests}
-        for fut in concurrent.futures.as_completed(futures):
-            t = futures[fut]
-            try:
-                ok, dt = fut.result()
-            except Exception as e:  # pragma: no cover - defensive
-                log("test %d: unexpected runner error: %s" % (t, e))
-                ok, dt = False, 0.0
-            outcomes[t] = ok
+    try:
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max_workers) as ex:
+            futures = {ex.submit(run_test, t, sandboxes[t], tracker): t
+                       for t in tests}
+            for fut in concurrent.futures.as_completed(futures):
+                t = futures[fut]
+                try:
+                    ok, dt = fut.result()
+                except Exception as e:  # pragma: no cover - defensive
+                    log("test %d: unexpected runner error: %s" % (t, e))
+                    if tracker:
+                        tracker.finish(t, False)
+                    ok, dt = False, 0.0
+                outcomes[t] = ok
+    finally:
+        if display_thread:
+            stop_event.set()
+            display_thread.join(timeout=10)
 
     # Collect results for the tests that succeeded; keep sandboxes of
     # tests that failed for debugging.
