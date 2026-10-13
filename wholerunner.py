@@ -187,6 +187,9 @@ _T1_LAUNCH_RE = re.compile(r"launching\s+(\d+)\s+msa\s+iterations",
 _T1_ITR_RE = re.compile(r"bigloop\s+(\d+)\s+itr\s+(\d+)\s*/\s*(\d+)",
                         re.IGNORECASE)
 
+# Test 1 (v9): per-bigloop completion, e.g. "Bigloop 10 done: : 100%|...".
+_T1_DONE_RE = re.compile(r"bigloop\s+(\d+)\s+done", re.IGNORECASE)
+
 # Test 1 progress state: per-bigloop high-water iteration marks plus the
 # run dimensions parsed from the log. Only the test-1 worker thread ever
 # touches these (the executor runs one thread per test), so no lock needed.
@@ -234,13 +237,35 @@ def parse_test1_line(line, tracker):
                        "iter %d/%d (bigloop %d: %d/%d)"
                        % (total, grand, b, cur, _T1_ITERS_PER))
         return True
+    m = _T1_DONE_RE.search(line)
+    if m:
+        try:
+            b = int(m.group(1))
+        except ValueError:
+            return False
+        # Mark this bigloop as complete (all iterations done).
+        if _T1_ITERS.get(b, 0) < _T1_ITERS_PER:
+            _T1_ITERS[b] = _T1_ITERS_PER
+        total = sum(_T1_ITERS.values())
+        grand = _T1_N_BIGLOOPS * _T1_ITERS_PER
+        frac = (total / grand) if grand > 0 else 0.0
+        tracker.update(1, frac,
+                       "iter %d/%d (bigloop %d done)"
+                       % (total, grand, b))
+        return True
     # Legacy fallback: a bare "bigloop N" with no iteration info.
+    # Only use if we haven't seen any itr data yet AND N is a valid
+    # 0-based bigloop index. Otherwise ignore -- the itr/done patterns
+    # are authoritative, and N may be a bigloop ID (e.g. 10) rather
+    # than a progress count (e.g. "bigloop 10/1" is nonsense).
     m = _BIGLOOP_RE.search(line)
     if m:
         try:
             n = int(m.group(1))
         except ValueError:
             return False
+        if _T1_ITERS or n >= _T1_N_BIGLOOPS:
+            return True  # consume; don't guess progress
         tracker.update(1, n / _T1_N_BIGLOOPS,
                        "bigloop %d/%d" % (n, _T1_N_BIGLOOPS))
         return True
