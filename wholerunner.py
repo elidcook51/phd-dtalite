@@ -50,7 +50,7 @@ Sandboxes live in temp/run_<pid>/<name>/ and are deleted on success unless
 printed for debugging; other jobs keep running.
 
 Test 5 needs the UE-guidance trio (runner_parallel_ue.py, parallel_msa_ue.py,
-msa_ue.py) in ue_guidance/ next to this file, plus the v9 support scripts.
+msa_ue.py) next to this file, plus the v9 support scripts.
 
 Python 3.9 compatible, stdlib only.
 """
@@ -88,9 +88,6 @@ V9_SCRIPTS = ["runner_parallel.py", "parallel_msa.py", "msa.py",
               "assignment.py", "realtimeassignment.py",
               "traveltimecal.py", "progress.py", "choiceset.py"]
 
-# UE-guidance trio, extracted from ue_guidance_mpr_v1.zip, next to this file
-UE_GUIDANCE_DIR = "ue_guidance"
-
 # Test registry. "kind" tells main() how to run the entry:
 #   "v9" / "scenario" -- one sandbox, one command sequence (run_test)
 #   "dual-sweep"      -- two parallel sandboxes + aggregation (Test 5)
@@ -122,18 +119,9 @@ TESTS = {
                               "msa_ue.py", "assignment.py",
                               "realtimeassignment.py", "traveltimecal.py",
                               "progress.py", "choiceset.py"],
-                  "script_dir": UE_GUIDANCE_DIR,
-                  # Per-script source dirs: the trio lives in ue_guidance/,
-                  # the 5 support scripts live next to wholerunner.py (None),
-                  # so both sweeps run byte-identical support code.
-                  "script_dirs": {"runner_parallel_ue.py": UE_GUIDANCE_DIR,
-                                  "parallel_msa_ue.py": UE_GUIDANCE_DIR,
-                                  "msa_ue.py": UE_GUIDANCE_DIR,
-                                  "assignment.py": None,
-                                  "realtimeassignment.py": None,
-                                  "traveltimecal.py": None,
-                                  "progress.py": None,
-                                  "choiceset.py": None},
+                  # All 8 scripts (the UE-guidance trio plus the 5 v9
+                  # support scripts) live next to wholerunner.py.
+                  "script_dir": None,
                   "bigloops": "1-10", "n_bigloops": 10},
         }},
     6: {"label": "Test 6: future-condition volume estimation",
@@ -1267,27 +1255,11 @@ def main(argv=None):
                 "as prerequisites" % prereqs)
             tests = sorted(set(tests) | set(prereqs))
 
-    # Test 5 Phase B needs all 8 scripts the UE-sweep sandbox copies: the
-    # UE-guidance trio in ue_guidance/ plus the 5 support scripts next to
-    # this file. Auto-create ue_guidance/ from the trio in the repo root
-    # on first run; fail fast only if they are missing from both places.
-    # Resolve through scripts_for_sweep so this check can never drift from
-    # the sandbox spec.
+    # Test 5 UE sweep needs its 8 scripts next to this file (the
+    # UE-guidance trio plus the 5 v9 support scripts). Fail fast if
+    # any are missing. Resolve through scripts_for_sweep so this
+    # check can never drift from the sandbox spec.
     if 5 in tests:
-        ue_dir = os.path.join(HERE, UE_GUIDANCE_DIR)
-        ue_trio = ["runner_parallel_ue.py", "parallel_msa_ue.py", "msa_ue.py"]
-        trio_in_dir = all(os.path.isfile(os.path.join(ue_dir, f))
-                          for f in ue_trio)
-        if not trio_in_dir:
-            trio_in_root = [f for f in ue_trio
-                            if os.path.isfile(os.path.join(HERE, f))]
-            if len(trio_in_root) == len(ue_trio):
-                os.makedirs(ue_dir, exist_ok=True)
-                for f in ue_trio:
-                    shutil.copy(os.path.join(HERE, f),
-                                os.path.join(ue_dir, f))
-                print("[wholerunner] Auto-created %s/ from the trio in the "
-                      "repo root" % UE_GUIDANCE_DIR)
         missing = []
         for src_dir, fn in scripts_for_sweep("U"):
             src = (os.path.join(HERE, src_dir, fn) if src_dir
