@@ -27,6 +27,10 @@ import contextlib
 import multiprocessing
 import os
 import shutil
+import subprocess
+import sys
+import threading
+import time
 import warnings
 
 # Import the *modules* (not the functions) so the underlying implementations
@@ -381,6 +385,36 @@ def _msa_ue_worker(task):
     return msa_parallel_ue(**task)
 
 
+
+def _kill_all_workers():
+    """Aggressively terminate all child worker processes.
+
+    Uses taskkill /F /T on Windows (kills entire process tree) and
+    os.kill(SIGKILL) on POSIX. Called after the executor shuts down to
+    ensure no spinning workers survive as orphans.
+    """
+    killed = 0
+    for child in multiprocessing.active_children():
+        try:
+            pid = child.pid
+            if sys.platform == "win32":
+                subprocess.run(
+                    ["taskkill", "/F", "/PID", str(pid), "/T"],
+                    capture_output=True, timeout=10,
+                )
+            else:
+                os.kill(pid, 9)  # SIGKILL
+            killed += 1
+        except Exception:
+            pass
+    for child in multiprocessing.active_children():
+        try:
+            child.terminate()
+        except Exception:
+            pass
+    return killed
+
+
 def run_parallel_msa_ue(schedule, ue_routes_path, max_workers=None,
                         repo_root=None, keep_on_failure=True, msa_fn=None,
                         seed=1):
@@ -451,14 +485,19 @@ def run_parallel_msa_ue(schedule, ue_routes_path, max_workers=None,
                 executor.submit(_msa_ue_worker, task): task for task in tasks
             }
             pending = set(futures)
+            _POLL_INTERVAL_S = 5.0  # never busy-spin: sleep between polls
+            _t_start = time.monotonic()
+            _processed = set()
             while pending:
-                # wait() (not as_completed) so a hung worker cannot block
-                # the loop forever: after BIGLOOP_TIMEOUT_S with futures
-                # still pending, record them as failures and move on.
-                done, pending = concurrent.futures.wait(
-                    pending, timeout=BIGLOOP_TIMEOUT_S,
-                    return_when=concurrent.futures.ALL_COMPLETED)
+                # Poll with a short timeout so we can detect completion
+                # promptly without busy-spinning.
+                done, still_pending = concurrent.futures.wait(
+                    pending, timeout=_POLL_INTERVAL_S,
+                    return_when=concurrent.futures.FIRST_COMPLETED)
                 for future in done:
+                    if future in _processed:
+                        continue
+                    _processed.add(future)
                     task = futures[future]
                     try:
                         results.append(future.result())
@@ -472,28 +511,33 @@ def run_parallel_msa_ue(schedule, ue_routes_path, max_workers=None,
                             f"UE-guidance MSA run failed for bigloop={task['bigloop']} "
                             f"(sandbox Run{task['run_id']} kept for inspection): {exc}"
                         )
-                for future in pending:
-                    # Timed-out workers: record as failures; the inner
-                    # finally shuts the executor down without waiting.
-                    task = futures[future]
-                    failures.append(task['bigloop'])
-                    warnings.warn(
-                        f"UE-guidance MSA run timed out after {BIGLOOP_TIMEOUT_S}s "
-                        f"for bigloop={task['bigloop']} "
-                        f"(sandbox Run{task['run_id']} kept for inspection)."
-                    )
-                pending = set()
+                pending = still_pending - _processed
+                # Absolute timeout: record stuck bigloops as failures
+                _elapsed = time.monotonic() - _t_start
+                if pending and _elapsed > BIGLOOP_TIMEOUT_S:
+                    for future in pending:
+                        task = futures[future]
+                        failures.append(task['bigloop'])
+                        warnings.warn(
+                            f"UE-guidance MSA run timed out after {BIGLOOP_TIMEOUT_S}s "
+                            f"for bigloop={task['bigloop']} "
+                            f"(sandbox Run{task['run_id']} kept for inspection)."
+                        )
+                    pending = set()
+                if pending:
+                    time.sleep(1.0)  # never busy-spin
         finally:
             # Never block forever on stuck workers: cancel what has not
-            # started and do NOT wait for running workers. Then terminate
-            # any workers still alive (e.g. hung in a task) so they do
-            # not linger as orphans after this process exits.
-            executor.shutdown(wait=False, cancel_futures=True)
-            for _child in multiprocessing.active_children():
-                try:
-                    _child.terminate()
-                except Exception:
-                    pass
+            # started and do NOT wait for running workers. Then
+            # aggressively kill any workers still alive so they cannot
+            # linger as spinning orphans after this process exits.
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except Exception:
+                pass
+            _kill_all_workers()
+            time.sleep(2.0)
+            _kill_all_workers()
 
         # Mimic serial semantics: shared result files come from the last
         # (highest bigloop) iteration -- use the highest *successful* one.

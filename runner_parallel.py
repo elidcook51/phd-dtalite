@@ -22,6 +22,7 @@ multiprocessing uses the *spawn* start method.
 import argparse
 import os
 import sys
+import threading
 import time
 
 from parallel_msa import run_parallel_msa, runner_schedule
@@ -116,6 +117,21 @@ def main():
         seed=args.seed,
     )
     elapsed = time.time() - start
+
+    # Watchdog: work is done; if we haven't exited in 60s something is
+    # stuck (e.g. atexit handlers, lingering threads). Force-exit.
+    def _watchdog():
+        time.sleep(60)
+        try:
+            sys.stderr.write(
+                "\nWATCHDOG: main did not exit 60s after work completed; "
+                "forcing os._exit(1)\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os._exit(1)
+    _wd = threading.Thread(target=_watchdog, daemon=True)
+    _wd.start()
 
     print(f"All {len(results)} iterations finished in {elapsed:.1f}s.", flush=True)
     for r in sorted(results, key=lambda d: d["bigloop"]):
