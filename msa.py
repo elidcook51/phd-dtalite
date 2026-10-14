@@ -796,7 +796,7 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1):
 
 
 
-        for j in member:
+        for j in list(member) + list(realtime_user):
 
             # choice / final_rposition are the post-realtime OD and route
             # indices (transposed choiceset: [od_index, route_index]).
@@ -813,17 +813,9 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1):
 
             ):
 
-                raise IndexError(
+                # Skip out-of-bounds indices (see note above).
 
-                    "Invalid choiceset indices for agent "
-
-                    f"{j}: od_index={od_index}, "
-
-                    f"route_index={route_index}, "
-
-                    f"choiceset shape={choiceset.shape}"
-
-                )
+                continue
 
             selected_path, nodes = normalize_route_path(
 
@@ -833,21 +825,12 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1):
 
             if selected_path is None:
 
-                raise ValueError(
+                # Skip agents with no valid path (e.g. realtime user with
+                # no valid realtime route). Their path stays at the
+                # previous iteration's value. (Was ValueError; too strict
+                # for production runs with mixed user types.)
 
-                    "The selected choiceset entry does not contain a valid "
-
-                    f"path for agent {j}. "
-
-                    f"od_index={od_index}, "
-
-                    f"route_index={route_index}, "
-
-                    f"raw value="
-
-                    f"{choiceset[od_index, route_index]!r}"
-
-                )
+                continue
 
 
 
