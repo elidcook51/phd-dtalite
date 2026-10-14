@@ -203,16 +203,14 @@ def parse_tests_spec(spec):
 
 
 def progress_keys(selected):
-    """Ordered tracker keys for the whole run. Key 4 is added whenever
-    Test 5 is selected: a dependency Test 4 run may need a bar."""
+    """Ordered tracker keys for the whole run. Only tests in the
+    --tests selection get a bar (no phantom entries for dependencies)."""
     keys = []
     for t in selected:
         if t == 5:
             keys += ["5P", "5U", "5A"]
         else:
             keys.append(t)
-    if 5 in selected and 4 not in keys:
-        keys.append(4)
     return keys
 
 
@@ -1247,7 +1245,7 @@ def main(argv=None):
                       % e, file=sys.stderr)
                 ue_routes_pre = None
             else:
-                _ok_dep4, _dt_dep4 = run_test(4, _sb_dep4, tracker, args.seed,
+                _ok_dep4, _dt_dep4 = run_test(4, _sb_dep4, None, args.seed,
                                               "single")
                 if _ok_dep4:
                     try:
@@ -1483,10 +1481,39 @@ def main(argv=None):
                                 args.seed)
                 futures[fut] = ("sweep", "5P")
             # If Test 4 is not selected, the ue_routes prerequisite was
-            # pre-resolved before Phase A -- 5U can start immediately
-            # without waiting for any Phase A job.
+            # pre-resolved before Phase A -- start 5U immediately alongside
+            # 5P without waiting for any Phase A job to complete.
             if 5 in tests and 4 not in tests:
-                _maybe_start_5u()
+                if ue_routes_pre and os.path.isfile(ue_routes_pre):
+                    log("Test 5: starting UE sweep (5U) immediately -- "
+                        "ue_routes.csv pre-resolved")
+                    try:
+                        _sb5u = setup_sandbox("test_5U", data_dir, temp_root,
+                                             scripts_for_sweep("U"))
+                    except Exception as e:
+                        print("ERROR: sandbox setup failed for Test 5 UE sweep: %s"
+                              % e, file=sys.stderr)
+                        sweep_outcomes["U"] = False
+                        sweep_5u_started = True
+                        if tracker:
+                            tracker.finish("5U", False)
+                    else:
+                        sandboxes["5U"] = _sb5u
+                        shutil.copy2(ue_routes_pre,
+                                     os.path.join(_sb5u, "ue_routes.csv"))
+                        sweep_5u_started = True
+                        _fut5u = ex.submit(
+                            run_sweep, "U", _sb5u, tracker, args.seed,
+                            os.path.join(_sb5u, "ue_routes.csv"))
+                        fut_5u_box[0] = _fut5u
+                        log("Test 5: 5U sweep submitted to executor")
+                else:
+                    log("Test 5: no ue_routes.csv available -- "
+                        "UE sweep (5U) cannot run")
+                    sweep_outcomes["U"] = False
+                    sweep_5u_started = True
+                    if tracker:
+                        tracker.finish("5U", False)
             for fut in concurrent.futures.as_completed(futures):
                 kind, key = futures[fut]
                 try:
