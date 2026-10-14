@@ -1310,6 +1310,16 @@ def main(argv=None):
         if 5 in tests:
             sandboxes["5P"] = setup_sandbox(
                 "test_5P", data_dir, temp_root, scripts_for_sweep("P"))
+            # Set up 5U sandbox here too (not inside the executor) so a
+            # startup failure is caught by the fail-fast handler above.
+            # The 5U sweep itself is submitted in the executor below.
+            if 4 not in tests and ue_routes_pre and os.path.isfile(ue_routes_pre):
+                _sb5u_pre = setup_sandbox(
+                    "test_5U", data_dir, temp_root, scripts_for_sweep("U"))
+                shutil.copy2(ue_routes_pre,
+                             os.path.join(_sb5u_pre, "ue_routes.csv"))
+                sandboxes["5U"] = _sb5u_pre
+                log("Test 5: 5U sandbox ready (ue_routes.csv pre-resolved)")
     except Exception as e:
         print("ERROR: sandbox setup failed: %s" % e, file=sys.stderr)
         if display_thread:
@@ -1447,11 +1457,12 @@ def main(argv=None):
                     print("ERROR: result collection failed for test %d: %s"
                           % (t, e), file=sys.stderr)
                     return False
-            else:  # sweep 5P
-                sandbox = sandboxes["5P"]
-                label = "Test 5 (proposed sweep)"
+            else:  # sweep 5P or 5U
+                sub = "U" if key == "5U" else "P"
+                sandbox = sandboxes[key]
+                label = "Test 5 (%s sweep)" % ("UE" if sub == "U" else "proposed")
                 try:
-                    collect_5("P", sandbox, results_root)
+                    collect_5(sub, sandbox, results_root)
                 except Exception as e:
                     print("ERROR: result collection failed for Test 5 "
                           "proposed sweep: %s" % e, file=sys.stderr)
@@ -1480,40 +1491,17 @@ def main(argv=None):
                 fut = ex.submit(run_sweep, "P", sandboxes["5P"], tracker,
                                 args.seed)
                 futures[fut] = ("sweep", "5P")
-            # If Test 4 is not selected, the ue_routes prerequisite was
-            # pre-resolved before Phase A -- start 5U immediately alongside
-            # 5P without waiting for any Phase A job to complete.
-            if 5 in tests and 4 not in tests:
-                if ue_routes_pre and os.path.isfile(ue_routes_pre):
-                    log("Test 5: starting UE sweep (5U) immediately -- "
-                        "ue_routes.csv pre-resolved")
-                    try:
-                        _sb5u = setup_sandbox("test_5U", data_dir, temp_root,
-                                             scripts_for_sweep("U"))
-                    except Exception as e:
-                        print("ERROR: sandbox setup failed for Test 5 UE sweep: %s"
-                              % e, file=sys.stderr)
-                        sweep_outcomes["U"] = False
-                        sweep_5u_started = True
-                        if tracker:
-                            tracker.finish("5U", False)
-                    else:
-                        sandboxes["5U"] = _sb5u
-                        shutil.copy2(ue_routes_pre,
-                                     os.path.join(_sb5u, "ue_routes.csv"))
-                        sweep_5u_started = True
-                        _fut5u = ex.submit(
-                            run_sweep, "U", _sb5u, tracker, args.seed,
-                            os.path.join(_sb5u, "ue_routes.csv"))
-                        fut_5u_box[0] = _fut5u
-                        log("Test 5: 5U sweep submitted to executor")
-                else:
-                    log("Test 5: no ue_routes.csv available -- "
-                        "UE sweep (5U) cannot run")
-                    sweep_outcomes["U"] = False
-                    sweep_5u_started = True
-                    if tracker:
-                        tracker.finish("5U", False)
+            # 5U sandbox was set up in Phase A setup (if ue_routes.csv
+            # was pre-resolved). Submit it to the executor here.
+            if "5U" in sandboxes:
+                log("Test 5: submitting UE sweep (5U) to executor")
+                sweep_5u_started = True
+                _fut5u = ex.submit(
+                    run_sweep, "U", sandboxes["5U"], tracker, args.seed,
+                    os.path.join(sandboxes["5U"], "ue_routes.csv"))
+                fut_5u_box[0] = _fut5u
+                futures[_fut5u] = ("sweep", "5U")
+                log("Test 5: 5U sweep submitted to executor")
             for fut in concurrent.futures.as_completed(futures):
                 kind, key = futures[fut]
                 try:
