@@ -1392,21 +1392,26 @@ def main(argv=None):
         test6_done = False
         tests_14 = [t for t in tests if t in (1, 2, 3, 4)]
 
-        # Track the 5U sweep: it starts as soon as Test 4's ue_routes.csv
-        # is available (right after Test 4 is collected), instead of
-        # waiting for the whole of Phase A (including the 30-min 5P sweep).
-        # fut_5u_box holds the Future once submitted; sweep_5u_started
-        # prevents double-start.
-        fut_5u_box = [None]
+        # The 5U sweep starts as soon as Test 4's ue_routes.csv is
+        # available (right after Test 4 is collected), instead of waiting
+        # for the whole of Phase A (including the 5P sweep).
+        # sweep_5u_started prevents double-start.
         sweep_5u_started = False
         test4_completed = False
+
+        # Single futures dict for ALL Phase A jobs. 5U goes here too
+        # (no separate fut_5u_box indirection) so the polling loop below
+        # handles every job uniformly. Values are ("test", t) or
+        # ("sweep", "5P"/"5U").
+        futures = {}
 
         def _maybe_start_5u():
             # Start the 5U sweep if its ue_routes.csv prerequisite is met.
             # Called after each Phase A job completes. When Test 4 is
             # selected, waits for this run's Test 4 to succeed+collect.
             # When Test 4 is not selected, uses the pre-resolved path
-            # (ue_routes_pre) immediately.
+            # (ue_routes_pre) immediately. Submits directly into the
+            # shared futures dict (no fut_5u_box).
             nonlocal sweep_5u_started, test4_completed
             if sweep_5u_started or 5 not in tests:
                 return
@@ -1448,7 +1453,8 @@ def main(argv=None):
                     if tracker:
                         tracker.finish("5U", False)
                     return
-            # Start the 5U sweep in the (still-open) executor.
+            # Start the 5U sweep in the (still-open) executor, adding it
+            # to the shared futures dict.
             sweep_5u_started = True
             try:
                 sb5u = setup_sandbox("test_5U", data_dir, temp_root,
@@ -1463,9 +1469,11 @@ def main(argv=None):
             sandboxes["5U"] = sb5u
             shutil.copy2(ue_routes, os.path.join(sb5u, "ue_routes.csv"))
             log("Test 5: starting UE sweep (5U) -- ue_routes.csv ready")
-            fut_5u_box[0] = ex.submit(
+            _f5u = ex.submit(
                 run_sweep, "U", sb5u, tracker, args.seed,
                 os.path.join(sb5u, "ue_routes.csv"))
+            futures[_f5u] = ("sweep", "5U")
+            log("Test 5: 5U sweep submitted to executor")
 
         def _maybe_run_test6():
             """Run Test 6 if all selected Tests 1-4 are done+collected."""
@@ -1491,7 +1499,8 @@ def main(argv=None):
             """Collect results immediately for a finished job.
 
             Returns True on success; False if collection itself failed
-            (which marks the job as failed).
+            (which marks the job as failed). Never hangs: pure file
+            copies with per-call exception handling.
             """
             if kind == "test":
                 t = key
@@ -1514,7 +1523,7 @@ def main(argv=None):
                     collect_5(sub, sandbox, results_root)
                 except Exception as e:
                     print("ERROR: result collection failed for Test 5 "
-                          "proposed sweep: %s" % e, file=sys.stderr)
+                          "%s sweep: %s" % (sub, e), file=sys.stderr)
                     return False
             if not args.keep_temp:
                 try:
@@ -1528,9 +1537,16 @@ def main(argv=None):
                 log("%s: sandbox kept (--keep-temp): %s" % (label, sandbox))
             return True
 
+        # Overall deadline for Phase A. Test 5's two sweeps are the long
+        # pole (~45 min each, in parallel); 18h is generous but guarantees
+        # the process ALWAYS reaches the summary instead of hanging
+        # silently at 100%.
+        _PHASE_A_TIMEOUT_S = 18 * 3600
+        _POLL_INTERVAL_S = 10.0
+
         with concurrent.futures.ThreadPoolExecutor(
                 max_workers=max_workers) as ex:
-            futures = {}
+            # Submit initial Phase A jobs.
             for t in tests:
                 if t in (1, 2, 3, 4):
                     fut = ex.submit(run_test, t, sandboxes[t], tracker,
@@ -1541,91 +1557,103 @@ def main(argv=None):
                                 args.seed)
                 futures[fut] = ("sweep", "5P")
             # 5U sandbox was set up in Phase A setup (if ue_routes.csv
-            # was pre-resolved). Submit it to the executor here.
+            # was pre-resolved). Submit it here, into the shared dict.
             if "5U" in sandboxes:
                 log("Test 5: submitting UE sweep (5U) to executor")
                 sweep_5u_started = True
                 _fut5u = ex.submit(
                     run_sweep, "U", sandboxes["5U"], tracker, args.seed,
                     os.path.join(sandboxes["5U"], "ue_routes.csv"))
-                fut_5u_box[0] = _fut5u
                 futures[_fut5u] = ("sweep", "5U")
                 log("Test 5: 5U sweep submitted to executor")
-            for fut in concurrent.futures.as_completed(futures):
-                kind, key = futures[fut]
-                try:
-                    ok, dt = fut.result()
-                except Exception as e:  # pragma: no cover - defensive
-                    log("job %s: unexpected runner error: %s" % (key, e))
-                    if tracker:
-                        tracker.finish(key, False)
-                    ok, dt = False, 0.0
-                if ok:
-                    # Collect immediately; a collection failure marks the
-                    # job as failed.
-                    if not _collect_now(kind, key):
-                        ok = False
-                    elif tracker:
-                        tracker.update(key, None, "done (collected)")
-                else:
-                    sb = sandboxes[key]
-                    print("%s FAILED -- sandbox kept for debugging: %s"
-                          % (key, sb))
-                if kind == "test":
-                    outcomes[key] = ok
-                    if key == 4:
-                        test4_completed = True
-                elif key == "5P":
-                    sweep_outcomes["P"] = ok
-                elif key == "5U":
-                    sweep_outcomes["U"] = ok
-                # Test 6 triggers as soon as Tests 1-4 are collected,
-                # without waiting for the 5P sweep to finish.
-                _maybe_run_test6()
-                # 5U starts as soon as Test 4's ue_routes.csv is ready
-                # (or immediately from the pre-resolved path if Test 4
-                # was not selected).
-                _maybe_start_5u()
 
-        # If the 5U sweep was started from inside the loop via
-        # _maybe_start_5u (i.e. it is NOT in the futures dict handled by
-        # as_completed above), wait for it here and collect it. A
-        # pre-resolved 5U was already awaited and collected by the loop,
-        # so it must not be processed twice.
-        if (fut_5u_box[0] is not None
-                and fut_5u_box[0] not in futures):
-            try:
-                ok5u, _dt5u = fut_5u_box[0].result()
-            except Exception as e:  # pragma: no cover - defensive
-                log("Test 5 (UE sweep): unexpected runner error: %s" % e)
-                if tracker:
-                    tracker.finish("5U", False)
-                ok5u = False
-            sweep_outcomes["U"] = ok5u
-            if ok5u:
-                try:
-                    collect_5("U", sandboxes["5U"], results_root)
-                except Exception as e:
-                    print("ERROR: result collection failed for Test 5 "
-                          "UE sweep: %s" % e, file=sys.stderr)
-                    sweep_outcomes["U"] = False
-                else:
-                    if tracker:
-                        tracker.update("5U", None, "done (collected)")
-            if not sweep_outcomes["U"]:
-                print("Test 5 (UE sweep) FAILED -- sandbox kept for "
-                      "debugging: %s" % sandboxes["5U"])
-            elif not args.keep_temp:
-                try:
-                    shutil.rmtree(sandboxes["5U"])
-                except Exception as e:
-                    log("WARNING: could not remove sandbox %s: %s"
-                        % (sandboxes["5U"], e))
-                else:
-                    log("test 5U: sandbox removed")
-            else:
-                log("test 5U: sandbox kept (--keep-temp): %s"
-                    % sandboxes["5U"])
+            # Polling loop (replaces as_completed). as_completed() blocks
+            # until a future completes; if a worker thread never releases
+            # its future (e.g. a stuck pipe reader), it hangs forever.
+            # Polling fut.done() with a hard deadline guarantees forward
+            # progress no matter what the workers do.
+            _deadline = time.monotonic() + _PHASE_A_TIMEOUT_S
+            _processed_keys = set()
+            while True:
+                # Process every completed-but-unprocessed future. New
+                # futures (5U via _maybe_start_5u) may be added to the
+                # dict while processing; list() snapshots the dict so
+                # the mutation is safe, and the new future is picked up
+                # on the next pass.
+                for fut, (kind, key) in list(futures.items()):
+                    if key in _processed_keys:
+                        continue
+                    if not fut.done():
+                        continue
+                    _processed_keys.add(key)
+                    try:
+                        # fut is done, so result() returns immediately;
+                        # the timeout is a safety net only.
+                        ok, dt = fut.result(timeout=120)
+                    except Exception as e:  # pragma: no cover - defensive
+                        log("job %s: unexpected runner error: %s" % (key, e))
+                        if tracker:
+                            tracker.finish(key, False)
+                        ok, dt = False, 0.0
+                    if ok:
+                        # Collect immediately; a collection failure marks
+                        # the job as failed (never hangs: file copies).
+                        if not _collect_now(kind, key):
+                            ok = False
+                        elif tracker:
+                            tracker.update(key, None, "done (collected)")
+                    else:
+                        sb = sandboxes.get(key, "?")
+                        print("%s FAILED -- sandbox kept for debugging: %s"
+                              % (key, sb))
+                    if kind == "test":
+                        outcomes[key] = ok
+                        if key == 4:
+                            test4_completed = True
+                    elif key == "5P":
+                        sweep_outcomes["P"] = ok
+                    elif key == "5U":
+                        sweep_outcomes["U"] = ok
+                    # Test 6 triggers as soon as Tests 1-4 are collected,
+                    # without waiting for the 5P sweep to finish.
+                    _maybe_run_test6()
+                    # 5U starts as soon as Test 4's ue_routes.csv is ready
+                    # (may add a new future to the dict).
+                    _maybe_start_5u()
+
+                # Done when every future currently in the dict has been
+                # processed. If _maybe_start_5u just added 5U, it is not
+                # in _processed_keys, so we loop again.
+                _all_keys = set(key for (kind, key) in futures.values())
+                if _all_keys and _all_keys <= _processed_keys:
+                    break
+
+                # Hard deadline: never hang silently at 100%.
+                if time.monotonic() > _deadline:
+                    _stuck = sorted(
+                        str(key) for (kind, key) in futures.values()
+                        if key not in _processed_keys)
+                    log("ERROR: Phase A timed out after %s; stuck jobs: %s"
+                        % (fmt_min(_PHASE_A_TIMEOUT_S), _stuck))
+                    print("ERROR: Phase A timed out; stuck jobs: %s"
+                          % _stuck, file=sys.stderr)
+                    for (kind, key) in futures.values():
+                        if key in _processed_keys:
+                            continue
+                        if tracker:
+                            tracker.finish(key, False)
+                        if kind == "test":
+                            outcomes[key] = False
+                        elif key == "5P":
+                            sweep_outcomes["P"] = False
+                        elif key == "5U":
+                            sweep_outcomes["U"] = False
+                    # Don't let the `with` block's shutdown(wait=True)
+                    # hang on stuck workers.
+                    ex.shutdown(wait=False, cancel_futures=True)
+                    break
+
+                time.sleep(_POLL_INTERVAL_S)
     else:
         log("Phase A: no jobs to run")
         test6_done = False
@@ -1644,35 +1672,53 @@ def main(argv=None):
             log("Test 6: unexpected error: %s" % e)
             outcomes[6] = False
 
-    # ---- Test 5 aggregation (barrier on BOTH sweeps) ----
-    # (The 5U sweep now starts from inside the Phase A loop via
-    # _maybe_start_5u as soon as Test 4's ue_routes.csv is available,
-    # instead of waiting for the whole of Phase A. By the time we reach
-    # here, sweep_outcomes["U"] is already final. Test 6 already ran
-    # above: either triggered inside the Phase A loop as soon as Tests
-    # 1-4 were collected, or via the fallback.)
+    # ---- Test 5 aggregation (barrier on collected sweep OUTPUTS) ----
+    # Filesystem-based: verifies the per-bigloop dirs actually exist under
+    # results/test5/, instead of trusting the in-memory sweep_outcomes
+    # dict. A sweep that "succeeded" but collected nothing fails the
+    # barrier loudly with a clear message naming the missing sweep.
     if 5 in tests:
-        # Aggregation is a hard barrier on BOTH sweeps' collected outputs.
         if args.skip_aggregation:
             log("Test 5: aggregation skipped (--skip-aggregation)")
             agg_status = "skipped"
             if tracker:
                 tracker.finish("5A", True, "skipped")
-        elif sweep_outcomes["P"] and sweep_outcomes["U"]:
-            try:
-                ok_agg, _ = run_aggregation(results_root, args.seed, tracker)
-                agg_status = "ok" if ok_agg else "FAILED"
-            except RuntimeError as e:
-                print("ERROR: %s" % e, file=sys.stderr)
+        else:
+            _p_dirs = sorted(glob.glob(os.path.join(
+                results_root, "test5", "proposed_sweep", "bigloop_*")))
+            _u_dirs = sorted(glob.glob(os.path.join(
+                results_root, "test5", "ue_sweep", "bigloop_*")))
+            if not _p_dirs:
+                print("ERROR: Cannot aggregate: "
+                      "results/test5/proposed_sweep/ has no bigloop outputs "
+                      "(5P sweep failed or was not collected)",
+                      file=sys.stderr)
+                log("Test 5: aggregation not run "
+                    "(proposed_sweep outputs missing)")
                 agg_status = "FAILED"
                 if tracker:
                     tracker.finish("5A", False)
-        else:
-            log("Test 5: aggregation not run (a sweep failed)")
-            agg_status = "not-run"
-            if tracker:
-                tracker.update("5A", None, "not run")
-                tracker.finish("5A", False)
+            elif not _u_dirs:
+                print("ERROR: Cannot aggregate: "
+                      "results/test5/ue_sweep/ has no bigloop outputs "
+                      "(5U sweep failed or was not collected)",
+                      file=sys.stderr)
+                log("Test 5: aggregation not run (ue_sweep outputs missing)")
+                agg_status = "FAILED"
+                if tracker:
+                    tracker.finish("5A", False)
+            else:
+                log("Test 5: aggregating %d proposed + %d UE bigloops ..."
+                    % (len(_p_dirs), len(_u_dirs)))
+                try:
+                    ok_agg, _ = run_aggregation(results_root, args.seed,
+                                                tracker)
+                    agg_status = "ok" if ok_agg else "FAILED"
+                except RuntimeError as e:
+                    print("ERROR: %s" % e, file=sys.stderr)
+                    agg_status = "FAILED"
+                    if tracker:
+                        tracker.finish("5A", False)
 
     # ---- Summary (display stays live until here) ----
     if display_thread:
