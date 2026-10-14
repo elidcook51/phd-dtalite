@@ -1011,51 +1011,6 @@ def generate_proposed_summary(bigloop, full_output_dir, summary_path):
 # ----------------------------------------------------------------------
 # Test 5 ue_routes dependency
 # ----------------------------------------------------------------------
-def resolve_ue_routes(selected, outcomes, results_root, data_dir, temp_root,
-                      tracker, args):
-    """Return the absolute path of a usable ue_routes.csv for the Test 5
-    UE sweep.
-
-    Priority:
-      1. This run's Test 4 output (4 in selected and it succeeded) --
-         read from results/test4/ue_routes.csv (NOT the sandbox, which may
-         be deleted already).
-      2. Pre-existing results/test4/ue_routes.csv on disk.
-      3. Run Test 4 now as a dependency, collect it, and use its output.
-    Raises RuntimeError if all three fail.
-    """
-    target = os.path.join(results_root, "test4", "ue_routes.csv")
-    if 4 in selected and outcomes.get(4):
-        if os.path.isfile(target):
-            log("Test 5: using ue_routes.csv from this run's Test 4")
-            return target
-        log("Test 5: Test 4 succeeded but %s is missing -- checking disk"
-            % target)
-    if os.path.isfile(target):
-        log("Test 5: using existing results/test4/ue_routes.csv")
-        return target
-    log("Test 5: no usable ue_routes.csv -- running Test 4 as a dependency ...")
-    sb = setup_sandbox("test_dep4", data_dir, temp_root, scripts_for_test(4))
-    ok, dt = run_test(4, sb, tracker, args.seed, "single")
-    if not ok:
-        raise RuntimeError("Test 5 UE sweep needs ue_routes.csv: "
-                           "dependency Test 4 failed and no existing "
-                           "results/test4/ue_routes.csv")
-    try:
-        collect_234(4, sb, results_root)
-    except Exception as e:
-        raise RuntimeError("Test 5 UE sweep needs ue_routes.csv: "
-                           "dependency Test 4 collection failed: %s" % e)
-    if not args.keep_temp:
-        shutil.rmtree(sb)
-        log("test dep4: sandbox removed")
-    if not os.path.isfile(target):
-        raise RuntimeError("Test 5 UE sweep needs ue_routes.csv: "
-                           "dependency Test 4 ran but produced no ue_routes.csv")
-    log("Test 5: dependency Test 4 produced ue_routes.csv (%s)" % fmt_min(dt))
-    return target
-
-
 # ----------------------------------------------------------------------
 # Test 6: future-condition volume estimation (smart mode)
 # ----------------------------------------------------------------------
@@ -1271,6 +1226,50 @@ def main(argv=None):
                   % ", ".join(missing), file=sys.stderr)
             sys.exit(1)
 
+    # If Test 5 is selected without Test 4, resolve ue_routes.csv BEFORE
+    # Phase A so the 5U sweep can start immediately in Phase A instead of
+    # waiting. (When Test 4 IS selected, 5U starts from inside the Phase A
+    # loop as soon as Test 4 is collected.)
+    ue_routes_pre = None
+    if 5 in tests and 4 not in tests:
+        _pre_target = os.path.join(results_root, "test4", "ue_routes.csv")
+        if os.path.isfile(_pre_target):
+            log("Test 5: using existing results/test4/ue_routes.csv")
+            ue_routes_pre = _pre_target
+        else:
+            log("Test 5: no usable ue_routes.csv -- running Test 4 as a "
+                "dependency before Phase A ...")
+            try:
+                _sb_dep4 = setup_sandbox("test_dep4", data_dir, temp_root,
+                                         scripts_for_test(4))
+            except Exception as e:
+                print("ERROR: sandbox setup failed for Test 4 dependency: %s"
+                      % e, file=sys.stderr)
+                ue_routes_pre = None
+            else:
+                _ok_dep4, _dt_dep4 = run_test(4, _sb_dep4, tracker, args.seed,
+                                              "single")
+                if _ok_dep4:
+                    try:
+                        collect_234(4, _sb_dep4, results_root)
+                    except Exception as e:
+                        print("ERROR: dependency Test 4 collection failed: %s"
+                              % e, file=sys.stderr)
+                        _ok_dep4 = False
+                if not args.keep_temp:
+                    try:
+                        shutil.rmtree(_sb_dep4)
+                    except Exception:
+                        pass
+                if _ok_dep4 and os.path.isfile(_pre_target):
+                    log("Test 5: dependency Test 4 produced ue_routes.csv")
+                    ue_routes_pre = _pre_target
+                else:
+                    print("ERROR: Test 5 UE sweep needs ue_routes.csv: "
+                          "dependency Test 4 failed and no existing "
+                          "results/test4/ue_routes.csv", file=sys.stderr)
+                    ue_routes_pre = None
+
     if args.max_workers is not None and args.max_workers < 1:
         print("ERROR: --max-workers must be >= 1", file=sys.stderr)
         sys.exit(2)
@@ -1335,6 +1334,81 @@ def main(argv=None):
         # Tests 1-4 are all collected, without waiting for the 5P sweep).
         test6_done = False
         tests_14 = [t for t in tests if t in (1, 2, 3, 4)]
+
+        # Track the 5U sweep: it starts as soon as Test 4's ue_routes.csv
+        # is available (right after Test 4 is collected), instead of
+        # waiting for the whole of Phase A (including the 30-min 5P sweep).
+        # fut_5u_box holds the Future once submitted; sweep_5u_started
+        # prevents double-start.
+        fut_5u_box = [None]
+        sweep_5u_started = False
+        test4_completed = False
+
+        def _maybe_start_5u():
+            # Start the 5U sweep if its ue_routes.csv prerequisite is met.
+            # Called after each Phase A job completes. When Test 4 is
+            # selected, waits for this run's Test 4 to succeed+collect.
+            # When Test 4 is not selected, uses the pre-resolved path
+            # (ue_routes_pre) immediately.
+            nonlocal sweep_5u_started, test4_completed
+            if sweep_5u_started or 5 not in tests:
+                return
+            ue_routes = None
+            if 4 in tests:
+                if not test4_completed:
+                    return  # Test 4 hasn't finished yet
+                if not outcomes.get(4):
+                    # Test 4 failed -- 5U cannot run; fail it loudly.
+                    log("Test 5: Test 4 failed -- UE sweep (5U) cannot run")
+                    sweep_outcomes["U"] = False
+                    sweep_5u_started = True
+                    if tracker:
+                        tracker.finish("5U", False)
+                    return
+                candidate = os.path.join(results_root, "test4",
+                                         "ue_routes.csv")
+                if os.path.isfile(candidate):
+                    ue_routes = candidate
+                    log("Test 5: using ue_routes.csv from this run's Test 4")
+                else:
+                    log("Test 5: Test 4 succeeded but %s is missing -- "
+                        "UE sweep (5U) cannot run" % candidate)
+                    sweep_outcomes["U"] = False
+                    sweep_5u_started = True
+                    if tracker:
+                        tracker.finish("5U", False)
+                    return
+            else:
+                # Test 4 not selected: use the pre-resolved path (may be
+                # None if the dependency run failed -- fail 5U loudly).
+                if ue_routes_pre and os.path.isfile(ue_routes_pre):
+                    ue_routes = ue_routes_pre
+                else:
+                    log("Test 5: no ue_routes.csv available -- "
+                        "UE sweep (5U) cannot run")
+                    sweep_outcomes["U"] = False
+                    sweep_5u_started = True
+                    if tracker:
+                        tracker.finish("5U", False)
+                    return
+            # Start the 5U sweep in the (still-open) executor.
+            sweep_5u_started = True
+            try:
+                sb5u = setup_sandbox("test_5U", data_dir, temp_root,
+                                     scripts_for_sweep("U"))
+            except Exception as e:
+                print("ERROR: sandbox setup failed for Test 5 UE sweep: %s"
+                      % e, file=sys.stderr)
+                sweep_outcomes["U"] = False
+                if tracker:
+                    tracker.finish("5U", False)
+                return
+            sandboxes["5U"] = sb5u
+            shutil.copy2(ue_routes, os.path.join(sb5u, "ue_routes.csv"))
+            log("Test 5: starting UE sweep (5U) -- ue_routes.csv ready")
+            fut_5u_box[0] = ex.submit(
+                run_sweep, "U", sb5u, tracker, args.seed,
+                os.path.join(sb5u, "ue_routes.csv"))
 
         def _maybe_run_test6():
             """Run Test 6 if all selected Tests 1-4 are done+collected."""
@@ -1408,6 +1482,11 @@ def main(argv=None):
                 fut = ex.submit(run_sweep, "P", sandboxes["5P"], tracker,
                                 args.seed)
                 futures[fut] = ("sweep", "5P")
+            # If Test 4 is not selected, the ue_routes prerequisite was
+            # pre-resolved before Phase A -- 5U can start immediately
+            # without waiting for any Phase A job.
+            if 5 in tests and 4 not in tests:
+                _maybe_start_5u()
             for fut in concurrent.futures.as_completed(futures):
                 kind, key = futures[fut]
                 try:
@@ -1431,11 +1510,53 @@ def main(argv=None):
                           % (key, sb))
                 if kind == "test":
                     outcomes[key] = ok
+                    if key == 4:
+                        test4_completed = True
                 else:
                     sweep_outcomes["P"] = ok
                 # Test 6 triggers as soon as Tests 1-4 are collected,
                 # without waiting for the 5P sweep to finish.
                 _maybe_run_test6()
+                # 5U starts as soon as Test 4's ue_routes.csv is ready
+                # (or immediately from the pre-resolved path if Test 4
+                # was not selected).
+                _maybe_start_5u()
+
+        # If the 5U sweep was started from inside the loop, wait for it
+        # here (the executor is still open) and collect it immediately.
+        if fut_5u_box[0] is not None:
+            try:
+                ok5u, _dt5u = fut_5u_box[0].result()
+            except Exception as e:  # pragma: no cover - defensive
+                log("Test 5 (UE sweep): unexpected runner error: %s" % e)
+                if tracker:
+                    tracker.finish("5U", False)
+                ok5u = False
+            sweep_outcomes["U"] = ok5u
+            if ok5u:
+                try:
+                    collect_5("U", sandboxes["5U"], results_root)
+                except Exception as e:
+                    print("ERROR: result collection failed for Test 5 "
+                          "UE sweep: %s" % e, file=sys.stderr)
+                    sweep_outcomes["U"] = False
+                else:
+                    if tracker:
+                        tracker.update("5U", None, "done (collected)")
+            if not sweep_outcomes["U"]:
+                print("Test 5 (UE sweep) FAILED -- sandbox kept for "
+                      "debugging: %s" % sandboxes["5U"])
+            elif not args.keep_temp:
+                try:
+                    shutil.rmtree(sandboxes["5U"])
+                except Exception as e:
+                    log("WARNING: could not remove sandbox %s: %s"
+                        % (sandboxes["5U"], e))
+                else:
+                    log("test 5U: sandbox removed")
+            else:
+                log("test 5U: sandbox kept (--keep-temp): %s"
+                    % sandboxes["5U"])
     else:
         log("Phase A: no jobs to run")
         test6_done = False
@@ -1454,47 +1575,14 @@ def main(argv=None):
             log("Test 6: unexpected error: %s" % e)
             outcomes[6] = False
 
-    # ---- Test 5 Phase B (UE sweep, then aggregation) ----
-    # (Test 6 already ran above: either triggered inside the Phase A loop
-    # as soon as Tests 1-4 were collected, or via the fallback.)
+    # ---- Test 5 aggregation (barrier on BOTH sweeps) ----
+    # (The 5U sweep now starts from inside the Phase A loop via
+    # _maybe_start_5u as soon as Test 4's ue_routes.csv is available,
+    # instead of waiting for the whole of Phase A. By the time we reach
+    # here, sweep_outcomes["U"] is already final. Test 6 already ran
+    # above: either triggered inside the Phase A loop as soon as Tests
+    # 1-4 were collected, or via the fallback.)
     if 5 in tests:
-        try:
-            ue_routes = resolve_ue_routes(tests, outcomes, results_root,
-                                          data_dir, temp_root, tracker, args)
-        except RuntimeError as e:
-            print("ERROR: %s" % e, file=sys.stderr)
-            ue_routes = None
-        if ue_routes is not None:
-            try:
-                sb5u = setup_sandbox("test_5U", data_dir, temp_root,
-                                     scripts_for_sweep("U"))
-            except Exception as e:
-                print("ERROR: sandbox setup failed for Test 5 UE sweep: %s"
-                      % e, file=sys.stderr)
-                if display_thread:
-                    stop_event.set()
-                    display_thread.join(timeout=5)
-                sys.exit(1)
-            shutil.copy2(ue_routes, os.path.join(sb5u, "ue_routes.csv"))
-            ok5u, _ = run_sweep("U", sb5u, tracker, args.seed,
-                                os.path.join(sb5u, "ue_routes.csv"))
-            sweep_outcomes["U"] = ok5u
-            if ok5u:
-                try:
-                    collect_5("U", sb5u, results_root)
-                except Exception as e:
-                    print("ERROR: result collection failed for Test 5 "
-                          "UE sweep: %s" % e, file=sys.stderr)
-                    sweep_outcomes["U"] = False
-            if not sweep_outcomes["U"]:
-                print("Test 5 (UE sweep) FAILED -- sandbox kept for "
-                      "debugging: %s" % sb5u)
-            elif not args.keep_temp:
-                shutil.rmtree(sb5u)
-                log("test 5U: sandbox removed")
-            else:
-                log("test 5U: sandbox kept (--keep-temp): %s" % sb5u)
-
         # Aggregation is a hard barrier on BOTH sweeps' collected outputs.
         if args.skip_aggregation:
             log("Test 5: aggregation skipped (--skip-aggregation)")
