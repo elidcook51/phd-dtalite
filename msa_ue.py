@@ -997,7 +997,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
 
 
-        for j in member:
+        for j in range(dsize):  # MATLAB parity: msa.m writes all dsize agents
 
             # UE-guidance variant: guided members receive their UE
             # equilibrium route from ue_routes.csv instead of the
