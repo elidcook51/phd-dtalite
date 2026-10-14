@@ -81,6 +81,7 @@ def main():
     print("\nRunning mpr_aggregate.py...")
     cmd = [sys.executable, "mpr_aggregate.py",
            "--input-dir", os.path.join(results_root, "test5"),
+           "--output-dir", os.path.join(results_root, "test5"),
            "--seed", str(args.seed)]
     # mpr_aggregate writes to results/test5/ by default; check its --output-dir
     result = subprocess.run(cmd, capture_output=True, text=True)
