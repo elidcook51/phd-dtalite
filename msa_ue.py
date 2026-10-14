@@ -14,11 +14,14 @@ What differs from the Proposed (UO-guidance) version
 -----------------------------------------------------
 - ``msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1)`` takes
   one extra required argument: the path to ``ue_routes.csv``.  The CSV has
-  two columns, ``agent_id`` and ``path_node_sequence`` (format
-  ``"n1;n2;...;nK;"``); ``agent_id`` values index the same agents as the
-  ``j`` loop variable (0..dsize-1).  The CSV must be generated from the
-  SAME demand file as ``input_agent_initial.csv`` (36k vs 54k alignment is
-  by ``agent_id``), and it is loaded once, before the MSA iteration loop.
+  two columns: an agent-id column (header containing ``agent_id``) and a
+  route-path column (header containing ``path``; ``scenarios_ue.py`` writes
+  it as ``path_node_sequence``) with format ``"n1;n2;...;nK;"``.  Column
+  names are detected flexibly by substring match.  ``agent_id`` values index
+  the same agents as the ``j`` loop variable (0..dsize-1).  The CSV must be
+  generated from the SAME demand file as ``input_agent_initial.csv`` (36k vs
+  54k alignment is by ``agent_id``), and it is loaded once, before the MSA
+  iteration loop.
 - In the MSA iteration loop (injection point A), guided members get
   ``inputagent[j][11] = ue_route[int(j)]`` instead of the choiceset lookup.
   A missing ``agent_id`` raises ``KeyError`` immediately (fail fast -- a
@@ -74,22 +77,6 @@ from scipy.io import loadmat, savemat
 import time
 
 
-# DTALite executable. DTALite.exe is a Windows binary; on Linux (e.g. UVA
-# Rivanna) the native DTALite build is preferred, falling back to the Windows
-# exe under Wine. The bare name matters: with cwd='DTALite_Files' the child
-# resolves it *after* chdir, whereas Windows resolves the 'DTALite_Files/...'
-# path against the parent directory. Same rule holds inside the RunX/
-# sandboxes: parallel_msa_ue.py copytrees the whole DTALite_Files/ folder
-# (binary included) and chdirs into RunX/.
-import platform as _platform
-
-if _platform.system() == 'Windows':
-    DTALITE_CMD = ['DTALite_Files/DTALite.exe']
-else:
-    if os.path.isfile(os.path.join('DTALite_Files', 'DTALite')):
-        DTALITE_CMD = ['./DTALite']
-    else:
-        DTALITE_CMD = ['wine', 'DTALite.exe']
 
 
 
@@ -357,25 +344,6 @@ def parse_path_endpoints(raw_path, row_index=None):
 
 
 
-def stringify_rprime_keys(rprime):
-
-    """Convert rprime's (route, od, interval, itr) tuple keys to strings.
-
-    scipy's savemat silently writes [[None]] for dicts with non-string keys,
-    which would lose the whole per-route/OD/interval demand tensor; string
-    keys round-trip fine. Keys are 0-based (route, od, interval, itr).
-    """
-
-    return {
-
-        f"r{route:03d}_od{od:03d}_t{interval:02d}_itr{itr:02d}": count
-
-        for (route, od, interval, itr), count in rprime.items()
-
-    }
-
-
-
 def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
     """
     UE-guidance variant of ``msa``: guided members receive UE routes from
@@ -385,12 +353,15 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
     ----------
     bigloop, p, p_fix, p_realtime : as in ``msa.msa``.
     ue_routes_path : str or path-like (required, no default)
-        Path to ``ue_routes.csv`` with columns ``agent_id`` and
-        ``path_node_sequence`` (format ``"n1;n2;...;nK;"``).  ``agent_id``
-        must cover the same agent index space as the demand file (0..dsize-1),
-        so the CSV has to be generated from the SAME demand file as
-        ``DTALite_Files/input_agent_initial.csv`` (36k vs 54k alignment is by
-        ``agent_id``).  A missing or unreadable path raises immediately.
+        Path to ``ue_routes.csv`` with an agent-id column (header containing
+        ``agent_id``) and a route-path column (header containing ``path``;
+        ``scenarios_ue.py`` writes ``path_node_sequence``), format
+        ``"n1;n2;...;nK;"``.  Column headers are matched flexibly by
+        substring.  ``agent_id`` must cover the same agent index space as
+        the demand file (0..dsize-1), so the CSV has to be generated from
+        the SAME demand file as ``DTALite_Files/input_agent_initial.csv``
+        (36k vs 54k alignment is by ``agent_id``).  A missing or unreadable
+        path raises immediately.
     seed : RNG seed for ``dividerand`` (user-type assignment). Default: 1.
 
     Known side effect
@@ -634,18 +605,33 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
             "ue_routes_path is required (no default); pass the path to "
             "ue_routes.csv."
         )
-    _ue_df = pd.read_csv(
-        ue_routes_path, usecols=['agent_id', 'path_node_sequence']
-    )
-    if _ue_df['agent_id'].duplicated().any():
-        _dups = _ue_df.loc[_ue_df['agent_id'].duplicated(), 'agent_id'].unique()[:5]
+    # Column names are detected flexibly: scenarios_ue.py writes the agent-id
+    # column under the demand file's own header (fuzzy-matched "agent_id"),
+    # and older runs may use a different path-column name.  Match by
+    # normalized substring instead of requiring exact headers.
+    _ue_df = pd.read_csv(ue_routes_path)
+    _ue_cols = list(_ue_df.columns)
+    _ue_lowered = {c: str(c).strip().lower() for c in _ue_cols}
+    _ue_agent_col = next(
+        (c for c in _ue_cols if "agent_id" in _ue_lowered[c]), None)
+    _ue_path_col = next(
+        (c for c in _ue_cols
+         if c != _ue_agent_col and "path" in _ue_lowered[c]), None)
+    if _ue_agent_col is None or _ue_path_col is None:
+        raise ValueError(
+            f"ue_routes.csv ({ue_routes_path!r}) has unexpected columns "
+            f"{_ue_cols}; expected an agent_id column and a path column."
+        )
+    if _ue_df[_ue_agent_col].duplicated().any():
+        _dups = _ue_df.loc[
+            _ue_df[_ue_agent_col].duplicated(), _ue_agent_col].unique()[:5]
         raise ValueError(
             f"ue_routes.csv ({ue_routes_path!r}) has duplicate agent_id rows, "
             f"e.g. {list(_dups)}"
         )
     ue_route = dict(zip(
-        _ue_df['agent_id'].astype(int),
-        _ue_df['path_node_sequence'].astype(str),
+        _ue_df[_ue_agent_col].astype(int),
+        _ue_df[_ue_path_col].astype(str),
     ))
     del _ue_df
     # MINOR 1 fix: catch NaN/empty paths that .astype(str) turns into 'nan'
@@ -653,7 +639,8 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
     if _bad:
         raise ValueError(
             f"ue_routes.csv ({ue_routes_path!r}) has empty/invalid "
-            f"path_node_sequence for {len(_bad)} agent(s), e.g. {_bad[:5]}"
+            f"routes ({_ue_path_col!r}) for {len(_bad)} agent(s), "
+            f"e.g. {_bad[:5]}"
         )
     member_set = set(int(x) for x in member)
     _missing_guided = member_set - set(ue_route.keys())
@@ -999,7 +986,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
         subprocess.run(
 
-            DTALITE_CMD, cwd = 'DTALite_Files', check = True,
+            [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
 
             **dtalite_kwargs()
 
@@ -1037,14 +1024,11 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
 
 
-        # MATLAB reads output_LinkMOE.csv col 8 (total_link_volume, one row
-        # per link), not output_LinkTDMOE.csv col 8 (link x timestamp
-        # in-volume). Select the column by name, not position.
-        dd = pd.read_csv('DTALite_Files/output_LinkMOE.csv')
+        dd = pd.read_csv('DTALite_Files/output_LinkTDMOE.csv')
 
 
 
-        linkV.append(dd['total_link_volume'].to_numpy())
+        linkV.append(dd.iloc[:, 7].to_numpy())
 
 
 
@@ -1196,7 +1180,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
     subprocess.run(
 
-        DTALITE_CMD, cwd = 'DTALite_Files', check = True,
+        [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
 
             **dtalite_kwargs()
 
@@ -1316,7 +1300,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
     subprocess.run(
 
-        DTALITE_CMD, cwd = 'DTALite_Files', check = True,
+        [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
 
             **dtalite_kwargs()
 
@@ -1364,7 +1348,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
             'cc': cc,
 
-            'rprime': stringify_rprime_keys(rprime),
+            'rprime': rprime,
 
             'linkV': np.array(linkV, dtype = object),
 
