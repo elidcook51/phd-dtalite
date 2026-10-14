@@ -172,56 +172,6 @@ T6_PREDICT_SUFFIX = "predict_LinkMOE.csv"
 T6_ACTUAL_SUFFIX = "actual_LinkMOE.csv"
 
 
-def _rmtree_onerror(func, path, exc_info):
-    """shutil.rmtree onerror handler for sandbox cleanup: copy2 preserves
-    the read-only bit from the source tree, which makes rmtree raise
-    PermissionError on Windows. Clear the bit and retry once; swallow
-    anything left -- the caller logs instead of failing."""
-    try:
-        os.chmod(path, 0o666)
-    except OSError:
-        return
-    try:
-        func(path)
-    except OSError:
-        pass
-
-
-def _enable_windows_ansi():
-    """Best-effort: enable VT (ANSI escape) processing on Windows 10+
-    consoles so the live progress display renders instead of printing
-    raw escape codes. Returns True when ANSI output should work."""
-    if os.name != "nt":
-        return True
-    try:
-        os.system("")  # enables VT processing as a side effect
-        return True
-    except Exception:
-        return False
-
-
-def _kill_live_procs(live_procs, proc_lock):
-    """Terminate (then kill survivors of) every registered live subprocess.
-    Used by the KeyboardInterrupt handlers so Ctrl-C never orphans
-    DTALite/Python children."""
-    with proc_lock:
-        procs = list(live_procs.items())
-    for _key, proc in procs:
-        try:
-            proc.terminate()
-        except Exception:
-            pass
-    deadline = time.time() + 10.0
-    for _key, proc in procs:
-        try:
-            proc.wait(timeout=max(0.0, deadline - time.time()))
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-
-
 def log(msg):
     print("[wholerunner] %s" % msg, flush=True)
 
@@ -406,15 +356,20 @@ def parse_v9_sweep_line(line, tracker, key, state):
                        % (total, grand, b))
         return True
     # Legacy fallback: a bare "bigloop N" with no iteration info.
-    # Never derive progress from it -- the itr/done patterns above are
-    # authoritative. A bare line (e.g. a tqdm bar-creation redraw like
-    # "Bigloop 3: 0%|...") only means "bigloop N has started"; turning
-    # that into an N/n_bigloops bump would poison the monotonic tracker
-    # (a bigloop-10 bar redrawn first would park the display at ~91%
-    # until the real iterations catch up). Just consume the line so the
-    # percent pattern below doesn't misfire on it.
+    # Only use if we haven't seen any itr data yet AND N is a valid
+    # 0-based bigloop index. Otherwise ignore -- the itr/done patterns
+    # are authoritative, and N may be a bigloop ID (e.g. 10) rather
+    # than a progress count.
     m = _BIGLOOP_RE.search(line)
     if m:
+        try:
+            n = int(m.group(1))
+        except ValueError:
+            return False
+        if state.iters or n >= state.n_bigloops:
+            return True  # consume; don't guess progress
+        tracker.update(key, n / state.n_bigloops,
+                       "bigloop %d/%d" % (n, state.n_bigloops))
         return True
     m = _PCT_RE.search(line)
     if m:
@@ -610,7 +565,7 @@ def setup_sandbox(name, data_dir, temp_root, scripts):
     sandbox = os.path.join(temp_root, name)
     if os.path.isdir(sandbox):
         log("removing stale sandbox %s" % sandbox)
-        shutil.rmtree(sandbox, onerror=_rmtree_onerror)
+        shutil.rmtree(sandbox)
     os.makedirs(sandbox)
 
     sandbox_data = os.path.join(sandbox, "DTALite_Files")
@@ -715,13 +670,9 @@ def test5_commands(sub, sandbox, seed, ue_routes_path=None):
 # ----------------------------------------------------------------------
 # Execution (shared Popen engine; one thread per job)
 # ----------------------------------------------------------------------
-def _run_commands(label, sandbox, cmds, tracker, key, parse_line,
-                 live_procs=None, proc_lock=None):
+def _run_commands(label, sandbox, cmds, tracker, key, parse_line):
     """Run cmds sequentially in sandbox; each stdout line is appended to
-    run.log and passed to parse_line(cmd_idx, line). Returns (ok, elapsed).
-    While a command runs, its Popen handle is registered in live_procs[key]
-    (guarded by proc_lock) so a KeyboardInterrupt handler can terminate it
-    instead of orphaning the child."""
+    run.log and passed to parse_line(cmd_idx, line). Returns (ok, elapsed)."""
     log_path = os.path.join(sandbox, "run.log")
     quiet = tracker is not None
     if tracker:
@@ -743,37 +694,29 @@ def _run_commands(label, sandbox, cmds, tracker, key, parse_line,
                     cmd, cwd=sandbox,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1, errors="replace")
-                if live_procs is not None and proc_lock is not None:
-                    with proc_lock:
-                        live_procs[key] = proc
+                while True:
+                    line = proc.stdout.readline()
+                    if line:
+                        logfh.write(line)
+                        parse_line(cmd_idx, line)
+                    elif proc.poll() is not None:
+                        break
+                    else:
+                        time.sleep(0.05)
+                # Drain anything left in the pipe after exit.
                 try:
-                    while True:
-                        line = proc.stdout.readline()
-                        if line:
-                            logfh.write(line)
-                            parse_line(cmd_idx, line)
-                        elif proc.poll() is not None:
-                            break
-                        else:
-                            time.sleep(0.05)
-                    # Drain anything left in the pipe after exit.
-                    try:
-                        rest = proc.stdout.read()
-                    except Exception:
-                        rest = ""
-                    if rest:
-                        logfh.write(rest)
-                        for rline in rest.splitlines():
-                            parse_line(cmd_idx, rline)
-                    logfh.flush()
-                    try:
-                        proc.stdout.close()
-                    except Exception:
-                        pass
-                finally:
-                    if live_procs is not None and proc_lock is not None:
-                        with proc_lock:
-                            live_procs.pop(key, None)
+                    rest = proc.stdout.read()
+                except Exception:
+                    rest = ""
+                if rest:
+                    logfh.write(rest)
+                    for rline in rest.splitlines():
+                        parse_line(cmd_idx, rline)
+                logfh.flush()
+                try:
+                    proc.stdout.close()
+                except Exception:
+                    pass
                 if proc.returncode != 0:
                     if tracker:
                         tracker.finish(key, False)
@@ -797,32 +740,25 @@ def _run_commands(label, sandbox, cmds, tracker, key, parse_line,
     return True, dt
 
 
-def run_test(test, sandbox, tracker=None, seed=42, test1_mode="single",
-             live_procs=None, proc_lock=None):
+def run_test(test, sandbox, tracker=None, seed=42, test1_mode="single"):
     """Run one test's command sequence inside its sandbox. Returns
-    (ok, elapsed). live_procs/proc_lock register the live Popen handle so
-    a KeyboardInterrupt handler can terminate it."""
+    (ok, elapsed)."""
     cfg = TESTS[test]
     if test == 1:
         cmds = test1_commands(sandbox, seed, test1_mode)
     else:
         cmds = test24_commands(test, sandbox, seed)
     return _run_commands(cfg["label"], sandbox, cmds, tracker, test,
-                         lambda i, line: parse_progress_line(test, i, line, tracker),
-                         live_procs, proc_lock)
+                         lambda i, line: parse_progress_line(test, i, line, tracker))
 
 
-def run_sweep(sub, sandbox, tracker, seed, ue_routes_path=None,
-                live_procs=None, proc_lock=None):
-    """Run one Test 5 sweep (sub "P"/"U"). Returns (ok, elapsed).
-    live_procs/proc_lock register the live Popen handle so a
-    KeyboardInterrupt handler can terminate it."""
+def run_sweep(sub, sandbox, tracker, seed, ue_routes_path=None):
+    """Run one Test 5 sweep (sub "P"/"U"). Returns (ok, elapsed)."""
     key = "5" + sub
     label = "Test 5 (%s)" % TESTS[5]["subs"][sub]["label"]
     cmds = test5_commands(sub, sandbox, seed, ue_routes_path)
     return _run_commands(label, sandbox, cmds, tracker, key,
-                         lambda i, line: parse_progress_line(key, i, line, tracker),
-                         live_procs, proc_lock)
+                         lambda i, line: parse_progress_line(key, i, line, tracker))
 
 
 # ----------------------------------------------------------------------
@@ -1123,7 +1059,7 @@ def resolve_ue_routes(selected, outcomes, results_root, data_dir, temp_root,
         raise RuntimeError("Test 5 UE sweep needs ue_routes.csv: "
                            "dependency Test 4 collection failed: %s" % e)
     if not args.keep_temp:
-        shutil.rmtree(sb, onerror=_rmtree_onerror)
+        shutil.rmtree(sb)
         log("test dep4: sandbox removed")
     if not os.path.isfile(target):
         raise RuntimeError("Test 5 UE sweep needs ue_routes.csv: "
@@ -1267,9 +1203,6 @@ def parse_args(argv=None):
                     help="output root (default: results)")
     ap.add_argument("--keep-temp", action="store_true",
                     help="keep temp/run_<pid>/ sandboxes after success")
-    ap.add_argument("--no-clobber", action="store_true",
-                    help="abort (instead of warning) when --results-dir is "
-                         "not empty")
     ap.add_argument("--max-workers", type=int, default=None,
                     help="parallel workers (default: min(4, phase-A jobs))")
     ap.add_argument("--no-progress", action="store_true",
@@ -1322,22 +1255,6 @@ def main(argv=None):
     os.makedirs(results_root, exist_ok=True)
     os.makedirs(temp_root, exist_ok=True)
 
-    # Re-running into the same results dir silently overwrites. Warn;
-    # --no-clobber turns it into an abort.
-    try:
-        _res_entries = os.listdir(results_root)
-    except OSError:
-        _res_entries = []
-    if _res_entries:
-        _msg = ("results dir %s is not empty (%d entries) -- outputs "
-                "will be overwritten" % (results_root, len(_res_entries)))
-        if args.no_clobber:
-            print("ERROR: %s (--no-clobber: aborting; use a fresh "
-                  "--results-dir or drop --no-clobber)" % _msg,
-                  file=sys.stderr)
-            sys.exit(2)
-        log("WARNING: " + _msg)
-
     # Test 6 smart mode: fold missing prerequisites into the selection
     # BEFORE setup, so they run in Phase A like any other selected test.
     if 6 in tests:
@@ -1352,9 +1269,25 @@ def main(argv=None):
 
     # Test 5 Phase B needs all 8 scripts the UE-sweep sandbox copies: the
     # UE-guidance trio in ue_guidance/ plus the 5 support scripts next to
-    # this file. Resolve through scripts_for_sweep so this check can never
-    # drift from the sandbox spec.
+    # this file. Auto-create ue_guidance/ from the trio in the repo root
+    # on first run; fail fast only if they are missing from both places.
+    # Resolve through scripts_for_sweep so this check can never drift from
+    # the sandbox spec.
     if 5 in tests:
+        ue_dir = os.path.join(HERE, UE_GUIDANCE_DIR)
+        ue_trio = ["runner_parallel_ue.py", "parallel_msa_ue.py", "msa_ue.py"]
+        trio_in_dir = all(os.path.isfile(os.path.join(ue_dir, f))
+                          for f in ue_trio)
+        if not trio_in_dir:
+            trio_in_root = [f for f in ue_trio
+                            if os.path.isfile(os.path.join(HERE, f))]
+            if len(trio_in_root) == len(ue_trio):
+                os.makedirs(ue_dir, exist_ok=True)
+                for f in ue_trio:
+                    shutil.copy(os.path.join(HERE, f),
+                                os.path.join(ue_dir, f))
+                print("[wholerunner] Auto-created %s/ from the trio in the "
+                      "repo root" % UE_GUIDANCE_DIR)
         missing = []
         for src_dir, fn in scripts_for_sweep("U"):
             src = (os.path.join(HERE, src_dir, fn) if src_dir
@@ -1389,7 +1322,6 @@ def main(argv=None):
     log("Results dir: %s" % results_root)
     log("Temp root: %s" % temp_root)
     if use_progress:
-        _enable_windows_ansi()
         log("Live progress display enabled (refresh every 2s)")
         # Print a blank block so the first redraw has room to move up.
         display_thread = threading.Thread(
@@ -1425,30 +1357,19 @@ def main(argv=None):
     agg_status = "not-run"
     n_jobs = len(sandboxes)
     max_workers = args.max_workers or min(4, max(1, n_jobs))
-    interrupted = False
-    # Per-job registry of live subprocess handles so Ctrl-C can terminate
-    # the actual DTALite/Python children instead of orphaning them.
-    # Guarded by proc_lock; an entry exists only while that job's command
-    # is running.
-    live_procs = {}
-    proc_lock = threading.Lock()
 
     if n_jobs:
-        # NOTE: not a `with` block -- on KeyboardInterrupt the executor
-        # must be shut down with wait=False (a `with` would block in
-        # shutdown(wait=True) until every long test finished).
-        ex = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-        try:
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=max_workers) as ex:
             futures = {}
             for t in tests:
                 if t in (1, 2, 3, 4):
                     fut = ex.submit(run_test, t, sandboxes[t], tracker,
-                                    args.seed, args.test1_mode,
-                                    live_procs, proc_lock)
+                                    args.seed, args.test1_mode)
                     futures[fut] = ("test", t)
             if 5 in tests:
                 fut = ex.submit(run_sweep, "P", sandboxes["5P"], tracker,
-                                args.seed, None, live_procs, proc_lock)
+                                args.seed)
                 futures[fut] = ("sweep", "5P")
             for fut in concurrent.futures.as_completed(futures):
                 kind, key = futures[fut]
@@ -1463,22 +1384,8 @@ def main(argv=None):
                     outcomes[key] = ok
                 else:
                     sweep_outcomes["P"] = ok
-            ex.shutdown(wait=True)
-        except KeyboardInterrupt:
-            interrupted = True
-            print()  # move past the echoed ^C
-            log("interrupted by user -- terminating running jobs ...")
-            _kill_live_procs(live_procs, proc_lock)
-            ex.shutdown(wait=False, cancel_futures=True)
-            log("interrupted -- running job processes terminated")
     else:
         log("Phase A: no jobs to run")
-
-    if interrupted:
-        if display_thread:
-            stop_event.set()
-            display_thread.join(timeout=10)
-        sys.exit(130)
 
     # ---- Phase A collection (in test order; keep failed sandboxes) ----
     for t in tests:
@@ -1500,7 +1407,7 @@ def main(argv=None):
             outcomes[t] = False
             continue
         if not args.keep_temp:
-            shutil.rmtree(sandbox, onerror=_rmtree_onerror)
+            shutil.rmtree(sandbox)
             log("test %d: sandbox removed" % t)
         else:
             log("test %d: sandbox kept (--keep-temp): %s" % (t, sandbox))
@@ -1519,7 +1426,7 @@ def main(argv=None):
                 sweep_outcomes["P"] = False
             else:
                 if not args.keep_temp:
-                    shutil.rmtree(sandbox, onerror=_rmtree_onerror)
+                    shutil.rmtree(sandbox)
                     log("test 5P: sandbox removed")
                 else:
                     log("test 5P: sandbox kept (--keep-temp): %s" % sandbox)
@@ -1557,18 +1464,8 @@ def main(argv=None):
                     display_thread.join(timeout=5)
                 sys.exit(1)
             shutil.copy2(ue_routes, os.path.join(sb5u, "ue_routes.csv"))
-            try:
-                ok5u, _ = run_sweep("U", sb5u, tracker, args.seed,
-                                    os.path.join(sb5u, "ue_routes.csv"),
-                                    live_procs, proc_lock)
-            except KeyboardInterrupt:
-                print()  # move past the echoed ^C
-                log("interrupted by user -- terminating UE sweep ...")
-                _kill_live_procs(live_procs, proc_lock)
-                if display_thread:
-                    stop_event.set()
-                    display_thread.join(timeout=10)
-                sys.exit(130)
+            ok5u, _ = run_sweep("U", sb5u, tracker, args.seed,
+                                os.path.join(sb5u, "ue_routes.csv"))
             sweep_outcomes["U"] = ok5u
             if ok5u:
                 try:
@@ -1581,7 +1478,7 @@ def main(argv=None):
                 print("Test 5 (UE sweep) FAILED -- sandbox kept for "
                       "debugging: %s" % sb5u)
             elif not args.keep_temp:
-                shutil.rmtree(sb5u, onerror=_rmtree_onerror)
+                shutil.rmtree(sb5u)
                 log("test 5U: sandbox removed")
             else:
                 log("test 5U: sandbox kept (--keep-temp): %s" % sb5u)
