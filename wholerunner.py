@@ -60,6 +60,7 @@ import concurrent.futures
 import csv
 import glob
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -680,34 +681,82 @@ def _run_commands(label, sandbox, cmds, tracker, key, parse_line):
                     cmd, cwd=sandbox,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1, errors="replace")
+                # Read stdout in a daemon thread. A bare readline() here
+                # can block forever: on Windows a child that exits while
+                # one of its own descendants still holds the pipe open
+                # never delivers EOF, so proc.poll() would never be
+                # checked. The pump thread owns the blocking read; this
+                # thread polls proc.poll() and stops waiting once the
+                # child is gone (plus a grace period for stragglers).
+                _EOF = object()
+                _out_q = queue.Queue()
+
+                def _pump():
+                    try:
+                        for _ln in proc.stdout:
+                            _out_q.put(_ln)
+                    except Exception:
+                        pass
+                    finally:
+                        _out_q.put(_EOF)
+
+                _pt = threading.Thread(target=_pump, daemon=True)
+                _pt.start()
+                _PIPE_EOF_GRACE = 30.0
+                _eof_deadline = None
                 while True:
-                    line = proc.stdout.readline()
-                    if line:
-                        logfh.write(line)
-                        parse_line(cmd_idx, line)
-                    elif proc.poll() is not None:
+                    try:
+                        _item = _out_q.get(timeout=1.0)
+                    except queue.Empty:
+                        if proc.poll() is not None:
+                            if _eof_deadline is None:
+                                _eof_deadline = (time.monotonic()
+                                                 + _PIPE_EOF_GRACE)
+                                log("%s: process exited; waiting for "
+                                    "pipe EOF ..." % label)
+                            if time.monotonic() >= _eof_deadline:
+                                log("WARNING: %s: pipe still open %ds "
+                                    "after process exit (a descendant "
+                                    "may hold it); proceeding with "
+                                    "output collected so far"
+                                    % (label, _PIPE_EOF_GRACE))
+                                break
+                        continue
+                    if _item is _EOF:
                         break
-                    else:
-                        time.sleep(0.05)
-                # Drain anything left in the pipe after exit.
-                try:
-                    rest = proc.stdout.read()
-                except Exception:
-                    rest = ""
-                if rest:
-                    logfh.write(rest)
-                    for rline in rest.splitlines():
-                        parse_line(cmd_idx, rline)
+                    logfh.write(_item)
+                    parse_line(cmd_idx, _item)
+                # Drain anything the pump thread queued but we did not
+                # consume yet (non-blocking).
+                while True:
+                    try:
+                        _item = _out_q.get_nowait()
+                    except queue.Empty:
+                        break
+                    if _item is _EOF:
+                        break
+                    logfh.write(_item)
+                    parse_line(cmd_idx, _item)
                 logfh.flush()
                 try:
                     proc.stdout.close()
                 except Exception:
                     pass
-                if proc.returncode != 0:
+                # Populate returncode: the read loop above can exit via
+                # pipe EOF without having polled the child yet.
+                if proc.poll() is None:
+                    # Pipe hit EOF but the child is (briefly) still
+                    # alive; wait for its exit status.
+                    try:
+                        proc.wait(timeout=60)
+                    except Exception:
+                        pass
+                _rc = proc.returncode
+                if _rc != 0:
                     if tracker:
                         tracker.finish(key, False)
-                    log("%s: FAILED at '%s' (rc=%d); sandbox kept: %s" %
-                        (label, desc, proc.returncode, sandbox))
+                    log("%s: FAILED at '%s' (rc=%s); sandbox kept: %s" %
+                        (label, desc, _rc, sandbox))
                     return False, time.time() - t0
                 if not quiet:
                     log("%s: %s done (%s)" %
@@ -1519,16 +1568,17 @@ def main(argv=None):
                     elif tracker:
                         tracker.update(key, None, "done (collected)")
                 else:
-                    sb = (sandboxes[key] if kind == "test"
-                          else sandboxes["5P"])
+                    sb = sandboxes[key]
                     print("%s FAILED -- sandbox kept for debugging: %s"
                           % (key, sb))
                 if kind == "test":
                     outcomes[key] = ok
                     if key == 4:
                         test4_completed = True
-                else:
+                elif key == "5P":
                     sweep_outcomes["P"] = ok
+                elif key == "5U":
+                    sweep_outcomes["U"] = ok
                 # Test 6 triggers as soon as Tests 1-4 are collected,
                 # without waiting for the 5P sweep to finish.
                 _maybe_run_test6()
@@ -1537,9 +1587,13 @@ def main(argv=None):
                 # was not selected).
                 _maybe_start_5u()
 
-        # If the 5U sweep was started from inside the loop, wait for it
-        # here (the executor is still open) and collect it immediately.
-        if fut_5u_box[0] is not None:
+        # If the 5U sweep was started from inside the loop via
+        # _maybe_start_5u (i.e. it is NOT in the futures dict handled by
+        # as_completed above), wait for it here and collect it. A
+        # pre-resolved 5U was already awaited and collected by the loop,
+        # so it must not be processed twice.
+        if (fut_5u_box[0] is not None
+                and fut_5u_box[0] not in futures):
             try:
                 ok5u, _dt5u = fut_5u_box[0].result()
             except Exception as e:  # pragma: no cover - defensive
