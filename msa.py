@@ -796,7 +796,7 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1):
 
 
 
-        for j in range(dsize):  # MATLAB parity: msa.m writes all dsize agents
+        for j in member:
 
             # choice / final_rposition are the post-realtime OD and route
             # indices (transposed choiceset: [od_index, route_index]).
