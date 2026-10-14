@@ -432,6 +432,7 @@ def run_parallel_msa_ue(schedule, ue_routes_path, max_workers=None,
     ]
 
     results = []
+    failures = []
     futures = {}
     try:
         with concurrent.futures.ProcessPoolExecutor(
@@ -445,18 +446,35 @@ def run_parallel_msa_ue(schedule, ue_routes_path, max_workers=None,
                 try:
                     results.append(future.result())
                 except Exception as exc:
-                    raise RuntimeError(
-                        f"Parallel UE-guidance MSA run failed for bigloop={task['bigloop']} "
-                        f"(sandbox Run{task['run_id']})."
-                    ) from exc
+                    # Resilient: record the failure and continue with
+                    # remaining bigloops instead of aborting the sweep.
+                    # The failed sandbox is kept for inspection (see
+                    # finally block below).
+                    failures.append(task['bigloop'])
+                    warnings.warn(
+                        f"UE-guidance MSA run failed for bigloop={task['bigloop']} "
+                        f"(sandbox Run{task['run_id']} kept for inspection): {exc}"
+                    )
 
         # Mimic serial semantics: shared result files come from the last
-        # (highest bigloop) iteration.
-        last = max(tasks, key=lambda t: t["bigloop"])
-        collect_shared_results(
-            sandbox_path(last["run_id"], repo_root),
-            dest_dir=os.path.join(repo_root, SOURCE_DIR),
-        )
+        # (highest bigloop) iteration -- use the highest *successful* one.
+        if results:
+            last_ok = max(results, key=lambda r: r["bigloop"])
+            collect_shared_results(
+                sandbox_path(last_ok["run_id"], repo_root),
+                dest_dir=os.path.join(repo_root, SOURCE_DIR),
+            )
+        if failures:
+            if not results:
+                raise RuntimeError(
+                    f"All {len(failures)} UE-guidance MSA runs failed "
+                    f"(bigloops={sorted(failures)}). Sandboxes kept for inspection."
+                )
+            warnings.warn(
+                f"UE-guidance MSA sweep partially completed: "
+                f"{len(results)} succeeded, {len(failures)} failed "
+                f"(bigloops={sorted(failures)}). Failed sandboxes kept."
+            )
         return results
     finally:
         # Leaving the executor block waits for pending workers
