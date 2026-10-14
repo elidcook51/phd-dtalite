@@ -25,8 +25,15 @@ dividerand() uses a different RNG stream and will NOT match agent-by-agent).
 Usage:
     python compare_matlab_python.py --matlab <matlab DTALite_Files> --python <python DTALite_Files>
     python compare_matlab_python.py --matlab M --python P --bigloops 0 1 2 --rtol 1e-6 --atol 1e-8
+    python compare_matlab_python.py --matlab M --python P --no-strict   # old lenient behavior
 
 Exit code: 0 if every compared file passes, 1 otherwise.
+
+Strict mode (default ON): a result file that is missing on either side, or a
+bigloop present on only one side, is recorded as FAIL. Use --no-strict to
+restore the old lenient behavior of skipping them (SKIP). Without strict mode
+the tool could previously exit 0 "OVERALL: PASS" despite a missing output
+file, so strict is the default.
 """
 
 import argparse
@@ -237,6 +244,9 @@ def main():
     ap.add_argument("--atol", type=float, default=1e-8)
     ap.add_argument("--skip-input-agent", action="store_true",
                     help="skip the final input_agent.csv comparison")
+    ap.add_argument("--strict", action=argparse.BooleanOptionalAction, default=True,
+                    help="missing result files (or one-sided bigloops) FAIL the run "
+                         "(default: on; use --no-strict for the old lenient SKIP behavior)")
     ap.add_argument("--csv-out", default=None,
                     help="write a detailed per-column mismatch report to this CSV path")
     args = ap.parse_args()
@@ -247,18 +257,33 @@ def main():
             out(f"ERROR: not a directory: {d}")
             return 2
 
+    results = []  # (label, passed)
+    col_details = []  # per-column mismatch dicts (for --csv-out)
+
     if args.bigloops is None:
         bigloops, only_m, only_p = discover_bigloops(args.matlab, args.python)
-        if only_m:
-            out(f"NOTE: bigloops only in MATLAB folder (skipped): {only_m}")
-        if only_p:
-            out(f"NOTE: bigloops only in Python folder (skipped): {only_p}")
+        for b in only_m:
+            label = f"bigloop {b}: only in MATLAB folder (no Python counterpart)"
+            if args.strict:
+                out(f"NOTE: {label} -> FAIL (strict mode)")
+                results.append((label, False))
+            else:
+                out(f"NOTE: bigloop {b} only in MATLAB folder (skipped)")
+        for b in only_p:
+            label = f"bigloop {b}: only in Python folder (no MATLAB counterpart)"
+            if args.strict:
+                out(f"NOTE: {label} -> FAIL (strict mode)")
+                results.append((label, False))
+            else:
+                out(f"NOTE: bigloop {b} only in Python folder (skipped)")
     else:
         bigloops = args.bigloops
     if not bigloops:
         out("ERROR: no common bigloops found.")
         return 2
     out(f"Comparing bigloops: {bigloops}  (rtol={args.rtol:g}, atol={args.atol:g})")
+    out(f"Strict mode: {'ON' if args.strict else 'OFF'} "
+        f"(missing result files {'FAIL the run' if args.strict else 'are skipped'})")
 
     # context: agent split sizes from MATLAB's .mat
     for b in bigloops:
@@ -269,8 +294,6 @@ def main():
         else:
             out(f"WARNING: bigloop {b}: no {b}_userassignment.mat in MATLAB folder")
 
-    results = []  # (label, passed)
-    col_details = []  # per-column mismatch dicts (for --csv-out)
     for b in bigloops:
         for stem in RESULT_STEMS:
             for kind in RESULT_KINDS:
@@ -281,7 +304,12 @@ def main():
                 if not os.path.isfile(mp) or not os.path.isfile(pp):
                     missing = [t for t, p in (("matlab", mp), ("python", pp))
                                if not os.path.isfile(p)]
-                    out(f"\n=== {label} ===\n  SKIP (missing in {', '.join(missing)})")
+                    if args.strict:
+                        out(f"\n=== {label} ===\n  FAIL "
+                            f"(missing in {', '.join(missing)}; strict mode)")
+                        results.append((label, False))
+                    else:
+                        out(f"\n=== {label} ===\n  SKIP (missing in {', '.join(missing)})")
                     continue
                 m_df = read_loose_csv(mp)
                 p_df = read_loose_csv(pp)
@@ -304,13 +332,18 @@ def main():
                 out(f"  note: {n}")
             results.append((label, passed))
         else:
-            out(f"\n=== {label} ===\n  SKIP (not present in both folders)")
+            if args.strict:
+                out(f"\n=== {label} ===\n  FAIL (not present in both folders; strict mode)")
+                results.append((label, False))
+            else:
+                out(f"\n=== {label} ===\n  SKIP (not present in both folders)")
 
     out("\n" + "=" * 60 + "\nSUMMARY")
+    out(f"(strict mode {'ON' if args.strict else 'OFF'})")
     npass = sum(1 for _, p in results if p)
     for label, passed in results:
         out(f"  [{'PASS' if passed else 'FAIL'}] {label}")
-    out(f"\n{npass}/{len(results)} files passed")
+    out(f"\n{npass}/{len(results)} checks passed")
     if npass == len(results):
         out("OVERALL: PASS -- MATLAB and Python results match within tolerance.")
     else:

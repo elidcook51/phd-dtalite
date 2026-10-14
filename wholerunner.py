@@ -42,7 +42,8 @@ Outputs per test under <results-dir>/:
 
 Sandboxes live in temp/run_<pid>/test_<N>/ and are deleted on success unless
 --keep-temp is given. On failure the sandbox is kept and its path is
-printed for debugging; other tests keep running.
+printed for debugging; other tests keep running. Ctrl-C terminates the
+running tests (no orphaned DTALite processes) and exits.
 
 Python 3.9 compatible, stdlib only.
 """
@@ -122,6 +123,34 @@ TAG_RE = re.compile(r"^(\d+)(UOinfor|predict|actual)_agent\.csv$")
 # tracks total iterations completed across all bigloops (N*M).
 # Test 4 MSA iteration cap (matches scenarios_ue.py --max-iters default).
 T4_MAX_ITERS = 50
+
+
+def _rmtree_onerror(func, path, exc_info):
+    """shutil.rmtree onerror handler for post-run sandbox cleanup: copy2
+    preserves the read-only bit from the source tree, which makes rmtree
+    raise PermissionError on Windows. Clear the bit and retry once;
+    swallow anything left -- the caller warns instead of failing."""
+    try:
+        os.chmod(path, 0o666)
+    except OSError:
+        return
+    try:
+        func(path)
+    except OSError:
+        pass
+
+
+def _enable_windows_ansi():
+    """Best-effort: enable VT (ANSI escape) processing on Windows 10+
+    consoles so the live progress display renders instead of printing
+    raw escape codes. Returns True when ANSI output should work."""
+    if os.name != "nt":
+        return True
+    try:
+        os.system("")  # enables VT processing as a side effect
+        return True
+    except Exception:
+        return False
 
 
 def log(msg):
@@ -254,20 +283,15 @@ def parse_test1_line(line, tracker):
                        % (total, grand, b))
         return True
     # Legacy fallback: a bare "bigloop N" with no iteration info.
-    # Only use if we haven't seen any itr data yet AND N is a valid
-    # 0-based bigloop index. Otherwise ignore -- the itr/done patterns
-    # are authoritative, and N may be a bigloop ID (e.g. 10) rather
-    # than a progress count (e.g. "bigloop 10/1" is nonsense).
+    # Never derive progress from it -- the itr/done patterns above are
+    # authoritative. A bare line (e.g. a tqdm bar-creation redraw like
+    # "Bigloop 3: 0%|...") only means "bigloop N has started"; turning
+    # that into an N/_T1_N_BIGLOOPS bump would poison the monotonic
+    # tracker (a bigloop-10 bar redrawn first would park the display at
+    # ~91% until the real iterations catch up). Just consume the line so
+    # the percent pattern below doesn't misfire on it.
     m = _BIGLOOP_RE.search(line)
     if m:
-        try:
-            n = int(m.group(1))
-        except ValueError:
-            return False
-        if _T1_ITERS or n >= _T1_N_BIGLOOPS:
-            return True  # consume; don't guess progress
-        tracker.update(1, n / _T1_N_BIGLOOPS,
-                       "bigloop %d/%d" % (n, _T1_N_BIGLOOPS))
         return True
     m = _PCT_RE.search(line)
     if m:
@@ -479,6 +503,7 @@ def test1_commands(sandbox, seed, test1_mode="single"):
         cmd += ["--bigloops", "10"]
         desc = "v9 pipeline (runner_parallel.py --bigloops 10)"
     else:
+        cmd += ["--bigloops", "0-10"]
         desc = "v9 pipeline (runner_parallel.py --bigloops 0-10, MPR sweep)"
     return [(cmd, desc)]
 
@@ -516,15 +541,23 @@ def test24_commands(test, sandbox, seed):
 # ----------------------------------------------------------------------
 # Test execution (one thread per test; each launches its own processes)
 # ----------------------------------------------------------------------
-def run_test(test, sandbox, tracker=None, seed=42, test1_mode="single"):
+def run_test(test, sandbox, tracker=None, seed=42, test1_mode="single",
+             live_procs=None, proc_lock=None):
     """Run one test's command sequence inside its sandbox. Subprocess
     stdout is captured via PIPE: every line is appended to run.log and
-    parsed for progress markers (when tracker is given). Returns
-    (ok, elapsed)."""
+    parsed for progress markers (when tracker is given). While a command
+    runs, its Popen handle is registered in live_procs[test] (guarded by
+    proc_lock) so main() can terminate it on KeyboardInterrupt.
+    Returns (ok, elapsed)."""
     cfg = TESTS[test]
     log_path = os.path.join(sandbox, "run.log")
     if test == 1:
         cmds = test1_commands(sandbox, seed, test1_mode)
+        # Seed the expected run dimensions up front (1 bigloop in single
+        # mode, 11 in sweep) so progress stays sane even if the
+        # "Launching N MSA iterations" line is never captured; the
+        # launch-line parser re-seeds from the log when it is seen.
+        _t1_reset(1 if test1_mode == "single" else 11)
     else:
         cmds = test24_commands(test, sandbox, seed)
 
@@ -548,25 +581,33 @@ def run_test(test, sandbox, tracker=None, seed=42, test1_mode="single"):
                     cmd, cwd=sandbox,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1, errors="replace")
-                while True:
-                    line = proc.stdout.readline()
-                    if line:
-                        logfh.write(line)
-                        parse_progress_line(test, cmd_idx, line, tracker)
-                    elif proc.poll() is not None:
-                        break
-                    else:
-                        time.sleep(0.05)
-                # Drain anything left in the pipe after exit.
+                if live_procs is not None and proc_lock is not None:
+                    with proc_lock:
+                        live_procs[test] = proc
                 try:
-                    rest = proc.stdout.read()
-                except Exception:
-                    rest = ""
-                if rest:
-                    logfh.write(rest)
-                    for rline in rest.splitlines():
-                        parse_progress_line(test, cmd_idx, rline, tracker)
-                logfh.flush()
+                    while True:
+                        line = proc.stdout.readline()
+                        if line:
+                            logfh.write(line)
+                            parse_progress_line(test, cmd_idx, line, tracker)
+                        elif proc.poll() is not None:
+                            break
+                        else:
+                            time.sleep(0.05)
+                    # Drain anything left in the pipe after exit.
+                    try:
+                        rest = proc.stdout.read()
+                    except Exception:
+                        rest = ""
+                    if rest:
+                        logfh.write(rest)
+                        for rline in rest.splitlines():
+                            parse_progress_line(test, cmd_idx, rline, tracker)
+                    logfh.flush()
+                finally:
+                    if live_procs is not None and proc_lock is not None:
+                        with proc_lock:
+                            live_procs.pop(test, None)
                 try:
                     proc.stdout.close()
                 except Exception:
@@ -825,10 +866,16 @@ def parse_args(argv=None):
                     help="output root (default: results)")
     ap.add_argument("--keep-temp", action="store_true",
                     help="keep temp/run_<pid>/test_<N>/ sandboxes after success")
+    ap.add_argument("--no-clobber", action="store_true",
+                    help="abort instead of overwriting when --results-dir "
+                         "exists and is non-empty (default: warn and "
+                         "overwrite)")
     ap.add_argument("--max-workers", type=int, default=None,
                     help="parallel workers (default: min(4, tests selected))")
     ap.add_argument("--no-progress", action="store_true",
-                    help="disable the live progress display")
+                    help="disable the live progress display (also the "
+                         "workaround if ANSI escapes render as garbage on "
+                         "a legacy Windows console)")
     ap.add_argument("--seed", type=int, default=42,
                     help="random seed for all tests (Tests 2-4 and "
                          "Test 1 via runner_parallel.py; default: 42)")
@@ -872,6 +919,23 @@ def main(argv=None):
     os.makedirs(results_root, exist_ok=True)
     os.makedirs(temp_root, exist_ok=True)
 
+    # Re-running into the same results dir silently overwrites
+    # (exist_ok=True plus copy2). Warn; --no-clobber turns it into
+    # an abort.
+    try:
+        _res_entries = os.listdir(results_root)
+    except OSError:
+        _res_entries = []
+    if _res_entries:
+        _msg = ("results dir %s is not empty (%d entries) -- outputs "
+                "will be overwritten" % (results_root, len(_res_entries)))
+        if args.no_clobber:
+            print("ERROR: %s (--no-clobber: aborting; use a fresh "
+                  "--results-dir or drop --no-clobber)" % _msg,
+                  file=sys.stderr)
+            sys.exit(2)
+        log("WARNING: " + _msg)
+
     if args.max_workers is not None and args.max_workers < 1:
         print("ERROR: --max-workers must be >= 1", file=sys.stderr)
         sys.exit(2)
@@ -894,6 +958,7 @@ def main(argv=None):
     log("Results dir: %s" % results_root)
     log("Temp root: %s" % temp_root)
     if use_progress:
+        _enable_windows_ansi()
         log("Live progress display enabled (refresh every 2s)")
         # Print a blank block so the first redraw has room to move up.
         display_thread = threading.Thread(
@@ -918,26 +983,64 @@ def main(argv=None):
 
     t_start = time.time()
     outcomes = {}
+    interrupted = False
+    # Per-test registry of live subprocess handles so Ctrl-C can
+    # terminate the actual DTALite/Python children instead of orphaning
+    # them. Guarded by proc_lock; an entry exists only while that test's
+    # command is running.
+    live_procs = {}
+    proc_lock = threading.Lock()
+    # NOTE: not a `with` block -- on KeyboardInterrupt the executor must
+    # be shut down with wait=False (a `with` would block in
+    # shutdown(wait=True) until every long test finished).
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
     try:
-        with concurrent.futures.ThreadPoolExecutor(
-                max_workers=max_workers) as ex:
-            futures = {ex.submit(run_test, t, sandboxes[t], tracker,
-                               args.seed, args.test1_mode): t
-                       for t in tests}
-            for fut in concurrent.futures.as_completed(futures):
-                t = futures[fut]
+        futures = {ex.submit(run_test, t, sandboxes[t], tracker,
+                             args.seed, args.test1_mode,
+                             live_procs, proc_lock): t
+                   for t in tests}
+        for fut in concurrent.futures.as_completed(futures):
+            t = futures[fut]
+            try:
+                ok, dt = fut.result()
+            except Exception as e:  # pragma: no cover - defensive
+                log("test %d: unexpected runner error: %s" % (t, e))
+                if tracker:
+                    tracker.finish(t, False)
+                ok, dt = False, 0.0
+            outcomes[t] = ok
+        ex.shutdown(wait=True)
+    except KeyboardInterrupt:
+        interrupted = True
+        print()  # move past the echoed ^C
+        log("interrupted by user -- terminating running tests ...")
+        with proc_lock:
+            procs = list(live_procs.items())
+        for t, proc in procs:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        # Brief grace period, then escalate survivors to kill.
+        deadline = time.time() + 10.0
+        for t, proc in procs:
+            try:
+                proc.wait(timeout=max(0.0, deadline - time.time()))
+            except Exception:
                 try:
-                    ok, dt = fut.result()
-                except Exception as e:  # pragma: no cover - defensive
-                    log("test %d: unexpected runner error: %s" % (t, e))
-                    if tracker:
-                        tracker.finish(t, False)
-                    ok, dt = False, 0.0
-                outcomes[t] = ok
+                    proc.kill()
+                except Exception:
+                    pass
+        ex.shutdown(wait=False, cancel_futures=True)
+        log("interrupted -- running test processes terminated")
     finally:
         if display_thread:
             stop_event.set()
             display_thread.join(timeout=10)
+
+    if interrupted:
+        # The tests were killed, not finished: skip collection/summary.
+        sys.exit(130)
 
     # Collect results for the tests that succeeded; keep sandboxes of
     # tests that failed for debugging.
@@ -958,8 +1061,15 @@ def main(argv=None):
             outcomes[t] = False
             continue
         if not args.keep_temp:
-            shutil.rmtree(sandbox)
-            log("test %d: sandbox removed" % t)
+            # Results are already collected, so a cleanup failure is a
+            # warning, not an error (the read-only bits preserved by
+            # copy2 make plain rmtree raise PermissionError on Windows).
+            shutil.rmtree(sandbox, onerror=_rmtree_onerror)
+            if os.path.exists(sandbox):
+                log("test %d: warning: sandbox not fully removed: %s"
+                    % (t, sandbox))
+            else:
+                log("test %d: sandbox removed" % t)
         else:
             log("test %d: sandbox kept (--keep-temp): %s" % (t, sandbox))
 

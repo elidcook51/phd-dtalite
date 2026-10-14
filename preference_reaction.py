@@ -16,17 +16,28 @@ Key modeling choices (documented so they are never ambiguous):
     would actually do given the guidance, so the true weights are right.
     (v9 passes realweights into comassignment as its `weights` argument,
     msa.py line 1129.)
-  * Route attributes are [length, tt, pltt, fuelcost, nc]. tt is the sum of
-    per-link mean travel times from the GUIDANCE run's output_LinkTDMOE.csv
-    (free-flow fallback for unobserved links). v9's realtime loop uses the
-    TD-link table at a single timestamp; the reaction is a single standalone
-    pass, so the mean over timestamps is the documented analog.
-  * pltt (planning time) = tt. v9 builds pltt from observed per-path agent
-    times when they exist and sets pltt = tt when they do not (its itr == 1
-    branch). The reaction has no per-path observations, so the no-observation
-    branch applies.
+  * Route attributes are [length, tt, pltt, fuelcost, nc], evaluated at the
+    agent's own departure timestamp ts = floor(departure) (MATLAB:
+    po = floor(agent(i,2)) - 359, then tt{1,f}(po,1)). For a route/timestamp
+    observed in the guidance run, tt = mean of the agents' experienced
+    travel times at that timestamp and pltt = max -- v9's experienced
+    mean/max construction (realtimeassignment.py lines ~180-215), itself a
+    port of the UE reference comassignment.m lines ~108-160. Unobserved
+    route/timestamps fall back to the TD-link table at that timestamp (the
+    traveltimecal analog), with pltt = tt; links missing from the table
+    fall back to free-flow, then to 1.0.
+  * The tournament standardizes attribute diffs for dataset-28 agents
+    (pref < 16650) with meanstd28 (SiouxFalls_net.xlsx 'weights' sheet,
+    cols A:E, rows 2-3): bscale = (diff - means) / stds. This is the UE
+    folder's convention (UE as information new equilibrium/
+    comassignment.m:233-236), the code behind Test 4's 66.54% target.
+    Pass --no-standardize to reproduce the Proposed folder's convention
+    (raw diffs; matlab_fixed/comassignment.m:247-252, commented out there)
+    for the direction-of-effect experiment. Dataset-2 agents (pref >=
+    16650) always standardize with meanstd2 -- both MATLAB folders agree.
   * fuelcost mirrors v9's traveltimecal mpg bands on realized link speed
-    (>40 mph -> 32, <25 mph -> 22, else 27 mpg; gas = $3.0/gal).
+    (>40 mph -> 32, <25 mph -> 22, else 27 mpg; gas = $3.0/gal), evaluated
+    at the agent's departure timestamp.
   * output_LinkTDMOE.csv is parsed with the csv module, NOT pandas:
     DTALite writes a trailing comma (25 data fields vs 24 header columns),
     which silently shifts every pandas column left by one. (The repo's
@@ -36,11 +47,14 @@ Pipeline:
   1. Load guidance CSV (ue_routes.csv or realtime_routes.csv).
   2. Load demand (input_agent_initial.csv), choice set (.mat), user
      preferences and true weights (SiouxFalls_net.xlsx).
-  3. Load per-link travel times from the GUIDANCE run's
-     output_LinkTDMOE.csv (mean over timestamps; free-flow fallback).
-     This MUST be read before the reaction DTALite run overwrites it.
+  3. Load per-timestamp per-link travel times from the GUIDANCE run's
+     output_LinkTDMOE.csv, plus the guidance run's agent experienced times
+     (output_agent.csv) for the observed mean/max attributes. Both MUST be
+     read before the reaction run overwrites the DTALite output files.
   4. Per agent: pairwise tournament over the choice-set routes for the
-     agent's OD -> actual choice.
+     agent's OD at the agent's departure timestamp -> actual choice. The
+     standardization convention is selected by --standardize (default,
+     UE folder) / --no-standardize (Proposed folder).
   5. Write input_agent.csv (byte-identical to the template except the path
      column) and run DTALite.exe.
   6. Satisfaction = mean(actual == guidance, normalized) over agents with
@@ -209,6 +223,32 @@ def read_meanstd2(xlsx_path):
     return ms
 
 
+def read_meanstd28(xlsx_path):
+    """Dataset-28 standardization: sheet 'weights' cols A:E, rows 2-3.
+
+    Returns (2, 5): row 0 = means, row 1 = stds. This is MATLAB's meanstd28
+    (UE msa.m:37 reads sheet 6, A2:E3 -- 'weights' is the 6th sheet), used
+    by the UE folder's reaction tournament (comassignment.m:233-236, the
+    code behind Test 4's 66.54%): bscale = (b - meanstd28(1,:)) ./ stds.
+    The Proposed folder's copy has this standardization commented out
+    (matlab_fixed/comassignment.m:247-252); pass --no-standardize to
+    reproduce that convention. Values in the current workbook: means
+    [-2.73, -2.68, 2.05, -0.31, 6.0], stds [1.59, 3.72, 3.07, 0.37, 6.46].
+    """
+    try:
+        raw = pd.read_excel(
+            xlsx_path, sheet_name="weights", usecols="A:E",
+            skiprows=0, nrows=3, header=None,
+        ).values
+    except Exception as exc:
+        fail("cannot read meanstd28 (cols A:E) of %s: %s" % (xlsx_path, exc))
+    ms = raw[1:3].astype(float)
+    if ms.shape != (2, 5) or np.isnan(ms).any():
+        fail("could not parse meanstd28 from sheet 'weights' cols A:E "
+             "rows 2-3")
+    return ms
+
+
 def parse_nodes(path):
     """Path string -> tuple of node ints, or None if unusable."""
     if path is None:
@@ -232,7 +272,7 @@ def normalize_path(nodes):
 
 
 def read_choice_set(data_dir):
-    """Choice set .mat -> (routelocation, od_routes, od_of).
+    """Choice set .mat -> (routelocation, od_routes).
 
     Faithful port of v9's msa.py lines 339-373: the transposed finallist
     is scanned cell by cell; each valid route appends a routelocation row
@@ -255,7 +295,6 @@ def read_choice_set(data_dir):
     n_od, n_routes = choiceset.shape
     rl_rows = []
     od_routes = {}   # od_idx -> {route_idx: nodes}
-    od_of = {}       # od_idx -> (origin, dest)
     for od_idx in range(n_od):
         routes = {}
         for r in range(n_routes):
@@ -267,20 +306,21 @@ def read_choice_set(data_dir):
                             float(r), float(od_idx)])
         if routes:
             od_routes[od_idx] = routes
-            first = routes[sorted(routes)[0]]
-            od_of[od_idx] = (first[0], first[-1])
     if not rl_rows:
         fail("no valid routes parsed from %s" % path)
-    return np.array(rl_rows, dtype=float), od_routes, od_of
+    return np.array(rl_rows, dtype=float), od_routes
 
 
 def read_link_times(data_dir):
-    """Mean travel_time_in_min per directed link over all timestamps.
+    """Travel time per directed link per timestamp, from the GUIDANCE run.
 
-    Parsed with the csv module (not pandas): DTALite's LinkTDMOE rows
-    carry a trailing comma -- 25 fields against a 24-column header --
-    which silently shifts pandas' column parser by one. Column positions
-    come from the header names, so the trailing empty field is ignored.
+    Returns {(from, to, ts): travel_time_in_min} from output_LinkTDMOE.csv,
+    keyed by integer timestamp (MATLAB's TDlink(:,3)). Parsed with the csv
+    module (not pandas): DTALite's LinkTDMOE rows can carry a trailing
+    comma -- 25 fields against a 24-column header -- which silently shifts
+    pandas' column parser by one. (The repo's scenarios_ue.py already
+    carries a ragged-CSV reader for this reason.) Duplicate (link, ts)
+    rows keep the last value.
     """
     path = os.path.join(data_dir, LINK_TDMOE)
     if not os.path.isfile(path):
@@ -291,28 +331,94 @@ def read_link_times(data_dir):
     if len(rows) < 2:
         fail("no data rows in %s" % path)
     names = [h.strip() for h in rows[0]]
-    for col in ("from_node_id", "to_node_id", "travel_time_in_min"):
+    for col in ("from_node_id", "to_node_id", "timestamp_in_min",
+                "travel_time_in_min"):
         if col not in names:
             fail("column '%s' missing from %s" % (col, path))
     i_from = names.index("from_node_id")
     i_to = names.index("to_node_id")
+    i_ts = names.index("timestamp_in_min")
     i_tt = names.index("travel_time_in_min")
-    sums, counts = {}, {}
+    tt = {}
     for row in rows[1:]:
         try:
             a = int(row[i_from].strip())
             b = int(row[i_to].strip())
-            tt = float(row[i_tt].strip())
+            ts = int(float(row[i_ts].strip()))
+            val = float(row[i_tt].strip())
         except (IndexError, TypeError, ValueError):
             continue
-        if not np.isfinite(tt):
+        if not np.isfinite(val):
             continue
-        key = (a, b)
-        sums[key] = sums.get(key, 0.0) + tt
-        counts[key] = counts.get(key, 0) + 1
-    if not sums:
+        tt[(a, b, ts)] = val
+    if not tt:
         fail("no usable travel times in %s" % path)
-    return {k: sums[k] / counts[k] for k in sums}
+    return tt
+
+
+def read_agent_observations(data_dir, od_routes):
+    """Experienced travel times from the GUIDANCE run's output_agent.csv.
+
+    Returns (observed, n_rows, n_unmatched) where observed maps
+    (od_idx, route_idx, ts) -> (tt_mean, pltt_max): tt is the mean of the
+    agents' experienced travel times on that route at departure timestamp
+    ts = floor(departure), pltt the max -- the ttloc branch of the UE
+    reference comassignment.m (~108-160), and v9's realtimeassignment.py
+    lines ~180-215. Routes are matched to the choice set by normalized
+    path string (MATLAB: find(strcmp(path, agentpath))); rows whose path
+    is not a choice-set route are skipped and counted. Must be read BEFORE
+    the reaction DTALite run overwrites the guidance outputs (same
+    stale-output discipline as read_link_times).
+    """
+    path = os.path.join(data_dir, AGENT_OUTPUT)
+    if not os.path.isfile(path):
+        fail("%s not found in %s -- run the guidance phase (DTALite) first"
+             % (AGENT_OUTPUT, data_dir))
+    path_lookup = {}
+    for od_idx, routes in od_routes.items():
+        for r, nodes in routes.items():
+            path_lookup[normalize_path(nodes)] = (od_idx, r)
+    with open(path, "r", newline="") as f:
+        rows = list(csv.reader(f))
+    if len(rows) < 2:
+        fail("no data rows in %s" % path)
+    names = [h.strip() for h in rows[0]]
+    for col in ("departure_time_in_min", "travel_time_in_min",
+                "path_node_sequence"):
+        if col not in names:
+            fail("column '%s' missing from %s" % (col, path))
+    i_dep = names.index("departure_time_in_min")
+    i_tt = names.index("travel_time_in_min")
+    i_path = names.index("path_node_sequence")
+    buckets = {}
+    n_rows = 0
+    n_unmatched = 0
+    for row in rows[1:]:
+        if max(i_dep, i_tt, i_path) >= len(row):
+            fail("short row in %s" % path)
+        try:
+            dep = float(row[i_dep].strip())
+            tt = float(row[i_tt].strip())
+        except (TypeError, ValueError):
+            fail("non-numeric departure/travel time in %s" % path)
+        if not (np.isfinite(dep) and np.isfinite(tt)):
+            fail("non-finite departure/travel time in %s" % path)
+        ts = int(np.floor(dep))
+        if ts < 360 or ts > 419:
+            fail("departure %.2f min in %s outside the 360-419 window"
+                 % (dep, path))
+        nodes = parse_nodes(row[i_path])
+        key = path_lookup.get(normalize_path(nodes)) if nodes else None
+        if key is None:
+            n_unmatched += 1
+            continue
+        buckets.setdefault((key[0], key[1], ts), []).append(tt)
+        n_rows += 1
+    if not buckets:
+        fail("no usable agent observations in %s" % path)
+    observed = {k: (float(np.mean(v)), float(np.max(v)))
+                for k, v in buckets.items()}
+    return observed, n_rows, n_unmatched
 
 
 def read_guidance(guidance_csv):
@@ -350,11 +456,13 @@ def read_guidance(guidance_csv):
 
 
 def read_agent_template(data_dir):
-    """Demand template -> ({agent_id: (o, d)}, {agent_id: raw path}, path).
+    """Demand template -> ({agent_id: (o, d)}, {agent_id: raw path},
+    {agent_id: departure_min}, template path).
 
     OD columns are looked up by name but asserted to sit at positions 4
     and 5, v9's positional convention (comrealtimeassignment reads
-    S.iloc[:, [4, 5]]).
+    S.iloc[:, [4, 5]]). Departures feed the per-timestamp attribute lookup
+    (ts = floor(departure), MATLAB's po = floor(agent(i,2)) - 359).
     """
     path = os.path.join(data_dir, AGENT_TEMPLATE)
     if not os.path.isfile(path):
@@ -365,7 +473,7 @@ def read_agent_template(data_dir):
         fail("no data rows in %s" % path)
     names = [h.strip() for h in rows[0]]
     for col in ("agent_id", "from_origin_node_id", "to_destination_node_id",
-                "path_node_sequence"):
+                "departure_time_in_min", "path_node_sequence"):
         if col not in names:
             fail("column '%s' missing from %s" % (col, path))
     i_from = names.index("from_origin_node_id")
@@ -374,22 +482,27 @@ def read_agent_template(data_dir):
         fail("OD columns of %s are at positions %d,%d, not v9's 4,5"
              % (path, i_from, i_to))
     id_col = names.index("agent_id")
+    dep_col = names.index("departure_time_in_min")
     path_col = names.index("path_node_sequence")
-    ods, template_paths = {}, {}
+    ods, template_paths, departures = {}, {}, {}
     for row in rows[1:]:
         try:
             aid = int(float(row[id_col].strip()))
             o = int(float(row[i_from].strip()))
             d = int(float(row[i_to].strip()))
+            dep = float(row[dep_col].strip())
         except (IndexError, TypeError, ValueError):
-            fail("bad agent/OD row in %s" % path)
+            fail("bad agent/OD/departure row in %s" % path)
+        if not np.isfinite(dep):
+            fail("non-finite departure time for agent %d in %s" % (aid, path))
         if aid in ods:
             fail("duplicate agent_id %d in %s" % (aid, path))
         ods[aid] = (o, d)
+        departures[aid] = dep
         template_paths[aid] = row[path_col] if path_col < len(row) else ""
     if not ods:
         fail("no agents in %s" % path)
-    return ods, template_paths, path
+    return ods, template_paths, departures, path
 
 
 # ---------------------------------------------------------------------------
@@ -397,26 +510,27 @@ def read_agent_template(data_dir):
 # ---------------------------------------------------------------------------
 
 class AttributeCache:
-    """Per-(od_idx, route) attribute vectors [length, tt, pltt, fuelcost, nc].
+    """Per-(od_idx, route, timestamp) attribute vectors
+    [length, tt, pltt, fuelcost, nc].
 
-    length = sum of link lengths from the network table.
-    tt     = sum of per-link mean times from the guidance DTALite run,
-             falling back to free-flow (length/speed*60), then to 1.0 --
-             traveltimecal's last-resort fallback.
-    pltt   = tt (no per-path observations in a standalone pass; v9's
-             no-observation branch).
-    fuelcost mirrors traveltimecal: mpg picked from the realized link
-             speed (length/tt*60): >40 -> 32, <25 -> 22, else 27.
-    nc     = number of links.
+    tt/pltt follow the UE reference (comassignment.m ~108-160): for a
+    route/timestamp observed in the guidance run, tt = mean of the agents'
+    experienced travel times at that departure timestamp and pltt = max;
+    unobserved route/timestamps fall back to the sum of the TD-link travel
+    times at that timestamp (pltt = tt). length and nc are
+    time-independent. fuelcost mirrors traveltimecal's mpg bands on the
+    realized per-link speed at that timestamp (like v9, which always calls
+    traveltimecal for fuel even on observed routes).
     """
 
-    def __init__(self, link_info, link_tt):
-        self.link_info = link_info    # (a, b) -> (length, freeflow_tt)
-        self.link_tt = link_tt        # (a, b) -> mean observed tt
+    def __init__(self, link_info, link_tt_ts, observed):
+        self.link_info = link_info      # (a, b) -> (length, freeflow_tt)
+        self.link_tt_ts = link_tt_ts    # (a, b, ts) -> observed tt
+        self.observed = observed        # (od, r, ts) -> (tt_mean, pltt_max)
         self.cache = {}
 
-    def link_time(self, a, b):
-        tt = self.link_tt.get((a, b))
+    def link_time(self, a, b, ts):
+        tt = self.link_tt_ts.get((a, b, ts))
         if tt is not None:
             return tt
         info = self.link_info.get((a, b))
@@ -424,21 +538,21 @@ class AttributeCache:
             return info[1]
         return 1.0
 
-    def get(self, od_idx, r, nodes):
-        key = (od_idx, r)
+    def get(self, od_idx, r, nodes, ts):
+        key = (od_idx, r, ts)
         hit = self.cache.get(key)
         if hit is not None:
             return hit
         length = 0.0
-        tt = 0.0
+        tt_sum = 0.0
         fuel = 0.0
         links = list(zip(nodes[:-1], nodes[1:]))
         for a, b in links:
             info = self.link_info.get((a, b))
             seg_len = info[0] if info is not None else 0.0
-            seg_tt = self.link_time(a, b)
+            seg_tt = self.link_time(a, b, ts)
             length += seg_len
-            tt += seg_tt
+            tt_sum += seg_tt
             if seg_len > 0 and seg_tt > 0:
                 speed = seg_len / seg_tt * 60.0
                 if speed > 40:
@@ -448,37 +562,62 @@ class AttributeCache:
                 else:
                     mpg = MPG_MID
                 fuel += seg_len / mpg * GAS_PRICE
-        vec = np.array([length, tt, tt, fuel, float(len(links))])
-        # vec[2] is pltt = tt: see the class docstring.
+        obs = self.observed.get(key)
+        if obs is not None:
+            tt_val, pltt_val = obs
+        else:
+            tt_val, pltt_val = tt_sum, tt_sum
+        vec = np.array([length, tt_val, pltt_val, fuel, float(len(links))])
         self.cache[key] = vec
         return vec
 
 
 def tournament(od_idx, route_ids, wrow, dataset2, attr_cache, od_routes,
-               meanstd2):
+               meanstd2, ts, standardize=True, meanstd28=None):
     """Pairwise utility tournament; returns the winning route index.
 
     Exact port of the tournament loop in v9's comrealtimeassignment
     (realtimeassignment.py lines 290-315): the champion starts as the
     first (lowest-index) route; each challenger replaces it when
     choice == 0, i.e. abs(ojvalue-1) > abs(ojvalue+1). diff = b1 - b0
-    (champion minus challenger); dataset-2 agents (pref >= 16650)
-    standardize the differences with meanstd2; ojvalue = sum(bscale*wrow)
-    with no intercept ("real weights don't have intercept"). The
-    onlylike0/onlylike1 debug lists in v9 are empty and are dropped here,
-    as is the parallel minimum-travel-time (pre_choice) tournament.
+    (champion minus challenger); ojvalue = sum(bscale*wrow) with no
+    intercept ("real weights don't have intercept"). The onlylike0/
+    onlylike1 debug lists in v9 are empty and are dropped here, as is the
+    parallel minimum-travel-time (pre_choice) tournament.
+
+    Route attributes are evaluated at the agent's departure timestamp ts
+    (floor of departure minutes; MATLAB's po = floor(agent(i,2)) - 359).
+
+    standardize selects the dataset-28 (pref < 16650) convention:
+      True  (default) -- the UE folder's convention (UE as information new
+              equilibrium/comassignment.m:233-236), behind Test 4's 66.54%
+              target: bscale = (diff - meanstd28_means) / meanstd28_stds.
+      False -- the Proposed folder's convention
+              (matlab_fixed/comassignment.m:247-252, commented out there):
+              raw diffs. Use for the direction-of-effect experiment.
+    Dataset-2 agents (pref >= 16650) always standardize with meanstd2 --
+    both MATLAB folders agree there, so the flag does not touch them.
     """
     champion = route_ids[0]
-    b1 = attr_cache.get(od_idx, champion, od_routes[champion])
+    b1 = attr_cache.get(od_idx, champion, od_routes[champion], ts)
     for r in route_ids[1:]:
-        b0 = attr_cache.get(od_idx, r, od_routes[r])
+        b0 = attr_cache.get(od_idx, r, od_routes[r], ts)
         diff = b1 - b0
         if dataset2:
             # Matches v9/MATLAB: the zero std at index 3 divides to inf
             # (0/0 to nan); the warning is suppressed exactly as v9 does.
             with np.errstate(divide="ignore", invalid="ignore"):
                 bscale = (diff - meanstd2[0, :]) / meanstd2[1, :]
+        elif standardize:
+            if meanstd28 is None:
+                fail("standardize=True requires meanstd28 "
+                     "(read from the xlsx 'weights' sheet)")
+            # UE folder convention: MATLAB's silent per-element division.
+            with np.errstate(divide="ignore", invalid="ignore"):
+                bscale = (diff - meanstd28[0, :]) / meanstd28[1, :]
         else:
+            # Proposed folder convention: raw diffs (the standardization
+            # lines are commented out in matlab_fixed/comassignment.m).
             bscale = diff
         ojvalue = float(np.sum(bscale * wrow))
         choice = 0 if abs(ojvalue - 1) > abs(ojvalue + 1) else 1
@@ -638,6 +777,15 @@ def parse_args(argv):
                         "(default: auto-detect in <data-dir>)")
     p.add_argument("--timeout", type=int, default=3600,
                    help="seconds to wait for DTALite (default 3600)")
+    p.add_argument("--standardize", dest="standardize", action="store_true",
+                   default=True,
+                   help="standardize dataset-28 tournament diffs with "
+                        "meanstd28 (UE-folder convention; default -- the "
+                        "convention behind Test 4's 66.54%% target)")
+    p.add_argument("--no-standardize", dest="standardize",
+                   action="store_false",
+                   help="use raw diffs for dataset-28 agents (Proposed-folder "
+                        "convention; for the direction-of-effect experiment)")
     args = p.parse_args(argv)
     if not args.data_dir:
         p.error("--data-dir is required: pass a writable sandbox copy of the DTALite inputs (DTALite_Files/ is read-only)")
@@ -665,15 +813,20 @@ def main(argv=None):
     prefs = read_users(xlsx)
     realweights = read_realweights(xlsx)
     meanstd2 = read_meanstd2(xlsx)
+    meanstd28 = read_meanstd28(xlsx)
     print("loading choice set ...")
-    routelocation, od_routes, od_of = read_choice_set(data_dir)
+    routelocation, od_routes = read_choice_set(data_dir)
     print("loading link travel times ...")
     # From the GUIDANCE run's outputs: read before the reaction run
     # overwrites the DTALite output files.
     link_tt = read_link_times(data_dir)
+    print("loading guidance-run agent observations ...")
+    observed, n_obs_rows, n_unmatched = read_agent_observations(
+        data_dir, od_routes)
     print("loading guidance and agent ODs ...")
     guidance = read_guidance(args.guidance_csv)
-    agent_ods, template_paths, template_path = read_agent_template(data_dir)
+    agent_ods, template_paths, departures, template_path = \
+        read_agent_template(data_dir)
 
     n_agents = len(agent_ods)
     if len(prefs) < n_agents:
@@ -684,13 +837,19 @@ def main(argv=None):
     log_lines.append("agents with guidance   : %d" % len(guidance))
     log_lines.append("choice set             : %d OD cells, %d routelocation "
                      "rows" % (len(od_routes), routelocation.shape[0]))
-    log_lines.append("link times             : %d links from guidance "
-                     "output_LinkTDMOE.csv (mean over timestamps)"
-                     % len(link_tt))
+    log_lines.append("link times             : %d (link, timestamp) cells "
+                     "from guidance output_LinkTDMOE.csv" % len(link_tt))
+    log_lines.append("observed tt/pltt       : %d (route, timestamp) cells "
+                     "from %d guidance agents (%d unmatched paths)"
+                     % (len(observed), n_obs_rows, n_unmatched))
+    log_lines.append("standardization        : %s"
+                     % ("meanstd28 (UE-folder convention)"
+                        if args.standardize
+                        else "raw diffs (Proposed-folder convention)"))
     log_lines.append("weights                : realweights (TRUE preferences, "
                      "cols J:O); predict phase used estimated cols A:F")
 
-    cache = AttributeCache(link_info, link_tt)
+    cache = AttributeCache(link_info, link_tt, observed)
 
     actual = {}          # agent_id -> chosen node tuple
     n_tournament = 0
@@ -713,7 +872,10 @@ def main(argv=None):
             routes = od_routes.get(f)
         if not routes:
             # No choice-set routes for this OD: the agent keeps the guided
-            # path, else the template's own path as a last resort.
+            # path, else the template's own path as a last resort. The kept
+            # guidance path is auto-satisfied by construction, so this branch
+            # is structural (n_no_choice_set = 0 in the actual run), not a
+            # result contributor.
             n_no_choice_set += 1
             g = guidance.get(aid)
             nodes = (parse_nodes(g) if g is not None
@@ -722,9 +884,16 @@ def main(argv=None):
                 fail("agent %d has no choice set and no fallback path" % aid)
             actual[aid] = nodes
             continue
+        dep = departures[aid]
+        ts = int(np.floor(dep))
+        if ts < 360 or ts > 419:
+            fail("agent %d departs at %.2f min, outside the 360-419 "
+                 "information window" % (aid, dep))
         route_ids = sorted(routes.keys())
         winner = tournament(f, route_ids, wrow, dataset2, cache, routes,
-                            meanstd2)
+                            meanstd2, ts,
+                            standardize=args.standardize,
+                            meanstd28=meanstd28)
         actual[aid] = routes[winner]
         n_tournament += 1
 

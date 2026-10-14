@@ -127,7 +127,7 @@ def bin_for(discrepancy_pct):
 
 def analyze_proposed(results_dir):
     """Analyze the Proposed system. Returns a result dict, or None if skipped."""
-    full_output = os.path.join(results_dir, "proposed", "full_output")
+    full_output = os.path.join(results_dir, "test1", "full_results")
     if not os.path.isdir(full_output):
         warn("proposed: directory not found: %s -- skipping" % full_output)
         return None
@@ -176,7 +176,7 @@ def analyze_proposed(results_dir):
         rows.append((key[0], key[1], pred_raw, act_raw, "%.2f" % disc, b))
 
     return {
-        "system": "proposed",
+        "system": "test1",
         "bigloop": prefix if prefix else None,
         "rows": rows,
         "bins": bin_counts,
@@ -227,13 +227,13 @@ def parse_args(argv=None):
         description="Test 6: per-link volume discrepancy between predicted "
                     "and actual link volumes (Bingrong Ch.4 Figure 8).")
     parser.add_argument("--results-dir", default="results",
-                        help="root containing proposed/, realtime_1/, ... "
+                        help="root containing test1/, test2/, ... "
                              "(default: results)")
     parser.add_argument("--output-dir", default=None,
                         help="where to write outputs "
                              "(default: <results-dir>/volume_estimation)")
     parser.add_argument("--systems",
-                        default="proposed,realtime_1,realtime_10,ue_baseline",
+                        default="test1,test2,test3,test4",
                         help="comma-separated systems to analyze")
     return parser.parse_args(argv)
 
@@ -252,7 +252,7 @@ def main(argv=None):
     analyzed = []
     skipped = []
     for system in systems:
-        if system == "proposed":
+        if system in ("proposed", "test1"):  # "proposed" kept as a standalone alias
             res = analyze_proposed(results_dir)
             if res is None:
                 skipped.append((system, "predicted/actual LinkMOE pair not found"))

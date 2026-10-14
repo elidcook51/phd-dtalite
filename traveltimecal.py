@@ -10,9 +10,6 @@ def traveltimecal(timestamp, TDlink, path, length_data, gas, itr, empty):
     if not hasattr(traveltimecal, 'tdlink_map'):
         traveltimecal.tdlink_map = {}
 
-    if not hasattr(traveltimecal, "length_map"):
-        traveltimecal.length_map = {}
-
     sque = path.split(';')
     index = [int(x) for x in sque if x.strip() != '']
 
@@ -119,8 +116,6 @@ def traveltimecal(timestamp, TDlink, path, length_data, gas, itr, empty):
 
     return total_time, fuelcost
 
-import numpy as np
-
 
 def traveltimecal_fast(timestamp, TDlink, path, length_data, gas, itr, empty):
     """
@@ -164,20 +159,20 @@ def traveltimecal_fast(timestamp, TDlink, path, length_data, gas, itr, empty):
     # --------------------------------------------------
     # Persistent lookup tables
     # --------------------------------------------------
-    if not hasattr(traveltimecal, "tdlink_map"):
-        traveltimecal.tdlink_map = {}
+    if not hasattr(traveltimecal_fast, "tdlink_map"):
+        traveltimecal_fast.tdlink_map = {}
 
-    if not hasattr(traveltimecal, "length_map"):
-        traveltimecal.length_map = {}
+    if not hasattr(traveltimecal_fast, "length_map"):
+        traveltimecal_fast.length_map = {}
 
     # --------------------------------------------------
     # Build lookup tables on first iteration
     # --------------------------------------------------
-    if itr == 1 or len(traveltimecal.tdlink_map) == 0:
+    if itr == 1 or len(traveltimecal_fast.tdlink_map) == 0:
 
         _vprint("Building TDlink lookup table...")
 
-        traveltimecal.tdlink_map = {}
+        traveltimecal_fast.tdlink_map = {}
 
         for r in range(TDlink.shape[0]):
             key = (
@@ -186,16 +181,16 @@ def traveltimecal_fast(timestamp, TDlink, path, length_data, gas, itr, empty):
                 int(TDlink[r, 1])   # to node
             )
 
-            traveltimecal.tdlink_map[key] = float(TDlink[r, 3])
+            traveltimecal_fast.tdlink_map[key] = float(TDlink[r, 3])
 
         _vprint(
             f"✓ TDlink lookup table created with "
-            f"{len(traveltimecal.tdlink_map):,} entries"
+            f"{len(traveltimecal_fast.tdlink_map):,} entries"
         )
 
         _vprint("Building length lookup table...")
 
-        traveltimecal.length_map = {}
+        traveltimecal_fast.length_map = {}
 
         for r in range(length_data.shape[0]):
 
@@ -204,14 +199,14 @@ def traveltimecal_fast(timestamp, TDlink, path, length_data, gas, itr, empty):
                 int(length_data[r, 1])
             )
 
-            traveltimecal.length_map[key] = (
+            traveltimecal_fast.length_map[key] = (
                 float(length_data[r, 2]),  # length
                 float(length_data[r, 3])   # freeflow speed
             )
 
         _vprint(
             f"✓ Length lookup table created with "
-            f"{len(traveltimecal.length_map):,} entries"
+            f"{len(traveltimecal_fast.length_map):,} entries"
         )
 
     # --------------------------------------------------
@@ -236,7 +231,7 @@ def traveltimecal_fast(timestamp, TDlink, path, length_data, gas, itr, empty):
             from_node = nodes[i]
             to_node = nodes[i + 1]
 
-            link_info = traveltimecal.length_map.get(
+            link_info = traveltimecal_fast.length_map.get(
                 (from_node, to_node)
             )
 
@@ -271,7 +266,7 @@ def traveltimecal_fast(timestamp, TDlink, path, length_data, gas, itr, empty):
 
         link_key = (from_node, to_node)
 
-        link_info = traveltimecal.length_map.get(link_key)
+        link_info = traveltimecal_fast.length_map.get(link_key)
 
         # ------------------------------------------
         # Get travel time
@@ -282,9 +277,9 @@ def traveltimecal_fast(timestamp, TDlink, path, length_data, gas, itr, empty):
             to_node
         )
 
-        if td_key in traveltimecal.tdlink_map:
+        if td_key in traveltimecal_fast.tdlink_map:
 
-            travel_time = traveltimecal.tdlink_map[td_key]
+            travel_time = traveltimecal_fast.tdlink_map[td_key]
 
         else:
 
@@ -493,4 +488,116 @@ def traveltimecal_fastv2(timestamp, TDlink, path, length_data, gas, itr, empty):
 
     traveltimecal_fastv2.path_result_cache[cache_key] = result
 
+    return result
+
+
+def calculate_path_result_guarded(path_nodes, departure_time, length_map,
+                                  tdlink_map, gas=3.0, path_result_cache=None):
+    """
+    Time-dependent path travel time and fuel cost, guarded against bad
+    TD-link entries.
+
+    Shared by ``realtimeassignment.comrealtimeassignment`` and
+    ``realtimeassignment.realtimeassignment_fast`` so both evaluate a
+    path at a departure time the same way.
+
+    Walks the path link by link, looking each link up at
+    ``floor(departure_time + elapsed)`` in the TD-link table. A missing
+    or non-finite TD-link entry -- or a zero/negative one -- falls back
+    to the free-flow time (``length / speed_limit * 60``), or 1.0 minute
+    when the link has no usable static data. The guards keep a literal
+    0.0 TD entry from raising ``ZeroDivisionError`` in the fuel-cost
+    calculation and stop NaNs from propagating into route attributes.
+
+    Parameters
+    ----------
+    path_nodes : tuple of int
+        Node sequence of the path, e.g. ``(1, 2, 3)``.
+
+    departure_time : float
+        Path departure time in minutes.
+
+    length_map : dict
+        ``(from_node, to_node) -> (link_length, speed_limit)``.
+
+    tdlink_map : dict
+        ``(time_minute, from_node, to_node) -> travel_time``.
+
+    gas : float
+        Fuel price.
+
+    path_result_cache : dict or None
+        Optional per-table result cache, keyed by
+        ``(floor(departure_time), path_nodes)``. The caller owns it and
+        must drop it when the TD-link table changes.
+
+    Returns
+    -------
+    (total_time, fuel_cost) : tuple of float
+    """
+    if path_result_cache is None:
+        path_result_cache = {}
+
+    cache_key = (int(np.floor(departure_time)), path_nodes)
+
+    cached_result = path_result_cache.get(cache_key)
+    if cached_result is not None:
+        return cached_result
+
+    total_time = 0.0
+    fuel_cost = 0.0
+
+    for from_node, to_node in zip(path_nodes[:-1], path_nodes[1:]):
+        link_info = length_map.get((from_node, to_node))
+
+        current_time = int(
+            np.floor(float(departure_time) + total_time)
+        )
+
+        travel_time = tdlink_map.get(
+            (current_time, from_node, to_node)
+        )
+
+        if travel_time is None or not np.isfinite(travel_time):
+            if link_info is None:
+                travel_time = 1.0
+            else:
+                link_length, speed_limit = link_info
+
+                if speed_limit > 0:
+                    travel_time = (
+                        link_length / speed_limit * 60.0
+                    )
+                else:
+                    travel_time = 1.0
+
+        travel_time = float(travel_time)
+
+        # Protect the speed and fuel calculations from zero or
+        # negative TD-link travel times.
+        if travel_time <= 0:
+            if link_info is not None and link_info[1] > 0:
+                travel_time = (
+                    link_info[0] / link_info[1] * 60.0
+                )
+            else:
+                travel_time = 1.0
+
+        total_time += travel_time
+
+        if link_info is not None:
+            link_length = link_info[0]
+            actual_speed = link_length / travel_time * 60.0
+
+            if actual_speed > 40.0:
+                mpg = 32.0
+            elif actual_speed < 25.0:
+                mpg = 22.0
+            else:
+                mpg = 27.0
+
+            fuel_cost += link_length / mpg * gas
+
+    result = (total_time, fuel_cost)
+    path_result_cache[cache_key] = result
     return result

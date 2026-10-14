@@ -1,13 +1,53 @@
 """Travel-time-based real-time route guidance baselines (Tests 2 and 3).
 
-Exact per-interval X_{m-1} implementation of the real-time baseline
-experiment from Bingrong Sun's 2018 UVA PhD dissertation, Chapter 4
+Two-shot (collapsed) per-interval X_{m-1} implementation of the real-time
+baseline experiment from Bingrong Sun's 2018 UVA PhD dissertation, Chapter 4
 ("travel time based real-time route guidance"): the evaluation period is
 split into intervals of sigma minutes, and every agent departing in
 interval m is assigned the shortest-travel-time route from its choice set
 under X_{m-1}, the link travel times observed during the previous interval.
 X_{-1} does not exist, so agents departing in interval 0 fall back to
 free-flow times (the dissertation's "historical traffic conditions").
+
+Deliberate approximations (not an exact rebuild of the MATLAB experiment)
+------------------------------------------------------------------------
+The MATLAB reference (realtimeassignment.m) runs DTALite ONCE PER PERIOD
+(up to 60 runs for sigma = 1), reading each period's X_{m-1} from the
+previous period's outputs, in which earlier periods' agents already follow
+guidance -- so guidance feeds back into the information.  This script runs
+DTALite TWICE TOTAL: once under the free-flow assignment, once under the
+reactive assignment.  All X_{m-1} tables derive from that single
+counterfactual all-free-flow run; guidance does not feed back into the
+information tables.  A faithful rolling loop is ~60 DTALite runs for
+sigma = 1, which was judged prohibitive -- the two-shot collapse is a
+deliberate, documented approximation (a per-period rolling loop remains a
+possible future change).
+
+Related accepted approximations:
+- X_{m-1} here is link-level interval-means summed statically over a route;
+  MATLAB prefers route-level experienced means at the point timestamp
+  359 + m*sigma, falling back to a link-sum with a forward time-walk per
+  traveltimecal.m.  For sigma = 10 MATLAB uses a single point timestamp,
+  not a 10-minute mean.
+- Route evaluation is static-bin: every link of a route is looked up in the
+  single previous-interval table X_{m-1}, while MATLAB's traveltimecal.m
+  walks the links in order, looking up each link at
+  floor(timestamp + cumulative time) (dissertation Eq. 21).  The Eq. 25
+  prose is ambiguous -- this script follows the prose's static-bin reading,
+  which diverges from the MATLAB code.  Noted as accepted; not reimplemented.
+- Period-1 (interval 0) agents use free-flow times; MATLAB sources period-1
+  information from the UO search's predicted congested conditions
+  (Each iteration.csv), measured at 1.07x-1.95x free-flow at ts = 360, which
+  can flip first-interval route rankings (~600 agents at sigma = 1).
+  Rewiring period-1 sourcing was judged not worth the extra cost; see
+  assign_paths.
+- Agent-experienced route times are not used: MATLAB sets tt{i,h} to the
+  mean of agents' experienced travel times for observed routes; this script
+  always sums per-link means.  Close but not identical.
+- Interval boundaries are left-closed/right-open (m = floor(t / sigma));
+  MATLAB phases are left-open/right-closed, so t = 360.0 exactly falls in no
+  MATLAB phase.  419/36,030 agents (1.16%) depart at exact integer minutes;
+  accepted as negligible.
 
 Procedure
 ---------
@@ -34,7 +74,12 @@ ids, empty LinkTDMOE).
 
 Targets (Bingrong 2018, 54,045 agents): sigma=1 -> 26,983.1 vehicle-hours,
 sigma=10 -> 28,039.6 vehicle-hours.  This repo's demand has ~36k agents,
-so the summary compares per-agent travel times.
+so the summary compares per-agent travel times.  Note the Table 4 targets
+are actual-traffic vehicle-hours under true-preference reactions
+(Table 3), while this script measures predicted traffic under
+shortest-route recommendations -- the "% vs target" line is a rough
+comparison only; the valid comparison comes after the
+preference-reaction step.
 
 Usage:
     python scenarios_realtime.py --sigma 1 --data-dir <sandbox> \
@@ -61,7 +106,7 @@ from scipy.io import loadmat
 TARGET_VEHICLE_HOURS = {1: 26983.1, 10: 28039.6}
 TARGET_N_AGENTS = 54045
 
-DTALITE_TIMEOUT_S = 3600
+DTALITE_TIMEOUT_S = 5400
 
 
 class ScenarioError(RuntimeError):
@@ -152,21 +197,59 @@ def read_free_flow_times(xlsx_path):
         raise ScenarioError("could not locate the '~' link table header in %s" % xlsx_path)
 
     free_flow = {}
-    for row in rows[header_row + 1:]:
+    # The intended table is the 'link length information' block: rows of
+    # (init node, term node, length, speed) with free-flow time computed as
+    # length / speed * 60. The '~'-headed block above it carries
+    # (capacity, length, ...) in the same columns, so it must NOT be read
+    # with this column mapping (the old last-wins loop was correct only by
+    # row-order accident: block 2 overwrote block 1's misread values).
+    marker = None
+    # Search only below the '~' link-table header: a matching phrase in a
+    # note/description row above the real block must not redirect the read
+    # into the capacity block with the (length, speed) column mapping.
+    for i in range(header_row + 1, len(rows)):
+        row = rows[i]
+        if row and any("link length information" in str(c).lower()
+                       for c in row if c is not None):
+            marker = i
+            break
+    if marker is None:
+        raise ScenarioError(
+            "could not locate the 'link length information' block in %s; "
+            "free-flow times are computed as length / speed * 60 from that "
+            "block" % xlsx_path)
+    n_skipped = 0
+    for row in rows[marker + 1:]:
         if len(row) < 5:
-            continue
+            if free_flow:
+                break  # end of the link-length block
+            continue   # blank rows between the marker and the data
         f, t, length, speed = row[1], row[2], row[3], row[4]
-        if not isinstance(f, (int, float)) or isinstance(f, bool):
-            continue  # label or blank row (e.g. 'link length information')
-        if not isinstance(t, (int, float)) or isinstance(t, bool):
-            continue
+        if (not isinstance(f, (int, float)) or isinstance(f, bool)
+                or not isinstance(t, (int, float)) or isinstance(t, bool)
+                or pd.isna(f) or pd.isna(t)):
+            if free_flow:
+                break  # label/footer row ends the block
+            continue   # junk rows above the block
         try:
             length, speed = float(length), float(speed)
         except (TypeError, ValueError):
-            continue
+            n_skipped += 1
+            continue  # malformed link row: skip, never ends the block
+        if pd.isna(length) or pd.isna(speed):
+            n_skipped += 1
+            continue  # never overwrite a good value with NaN
         if speed <= 0:
             raise ScenarioError("non-positive speed for link %s -> %s" % (f, t))
-        free_flow[(int(f), int(t))] = length / speed * 60.0
+        key = (int(f), int(t))
+        if key in free_flow:
+            n_skipped += 1
+            continue  # keep first; never overwrite a good value
+        free_flow[key] = length / speed * 60.0
+    if n_skipped:
+        print("WARNING: skipped %d malformed/duplicate rows in the "
+              "'link length information' block of %s"
+              % (n_skipped, xlsx_path), file=sys.stderr)
     if not free_flow:
         raise ScenarioError("no links parsed from %s" % xlsx_path)
     return free_flow
@@ -253,11 +336,15 @@ def read_choice_set(mat_path):
 # ---------------------------------------------------------------------------
 
 def run_dtalite(data_dir, timeout=DTALITE_TIMEOUT_S):
-    """Run DTALite once; fail fast with a clean error on any failure."""
-    for name in sorted(os.listdir(data_dir)):
-        if name.startswith("output_"):
-            os.remove(os.path.join(data_dir, name))
+    """Run DTALite once; fail fast with a clean error on any failure.
 
+    The executable is verified BEFORE any stale output_* files are deleted,
+    so a missing-exe run cannot destroy prior outputs.  Candidates that
+    exit non-zero fall through to the next one (e.g. a non-zero wine exit
+    does not preclude trying the native binary).
+    """
+    # Verify an executable exists first; a missing-exe run must not
+    # delete output_* files and then raise.
     exe_path = os.path.join(data_dir, "DTALite.exe")
     commands = []
     if os.path.isfile(exe_path):
@@ -272,6 +359,12 @@ def run_dtalite(data_dir, timeout=DTALITE_TIMEOUT_S):
             "DTALite executable not found in %s "
             "(looked for DTALite.exe and DTALite)" % data_dir
         )
+
+    for name in sorted(os.listdir(data_dir)):
+        if name.startswith("output_"):
+            path = os.path.join(data_dir, name)
+            if os.path.isfile(path):  # never os.remove a directory
+                os.remove(path)
 
     last_error = None
     for cmd in commands:
@@ -292,9 +385,10 @@ def run_dtalite(data_dir, timeout=DTALITE_TIMEOUT_S):
             raise ScenarioError("DTALite timed out after %d seconds" % timeout)
         if proc.returncode != 0:
             detail = (proc.stderr or proc.stdout or "").strip()
-            raise ScenarioError(
+            last_error = ScenarioError(
                 "DTALite failed (exit code %d): %s" % (proc.returncode, detail[-2000:])
             )
+            continue  # fall through to the next candidate
         return
     raise ScenarioError("could not launch DTALite in %s: %s" % (data_dir, last_error))
 
@@ -307,6 +401,11 @@ def write_input_agent(template_path, out_path, agent_col, path_col, paths):
     changes.  paths maps agent_id -> node list; None keeps the template's
     own path cell untouched.  Fails fast on duplicate agent ids in the
     template or an agent with no assigned path.
+
+    Note: rows longer than the header are silently trimmed to the header
+    width, while read_ragged_csv raises on non-empty extras -- the
+    strictness is asymmetric by design (the writer preserves template
+    shape; the reader guards input data).
     """
     if not os.path.isfile(template_path):
         raise ScenarioError("demand template not found: %s" % template_path)
@@ -368,6 +467,9 @@ def build_interval_link_times(tdmoe_df, sigma):
     interval_key = floor(timestamp_in_min / sigma).  X_{m-1} for agents in
     interval m is table[m - 1], i.e. rows with
     (m-1)*sigma <= timestamp < m*sigma (left-closed, right-open).
+
+    Note: each bin entry is an unweighted mean over the observed minutes --
+    a minute with little traffic counts as much as a busy one.
     """
     df = tdmoe_df.copy()
     df["from_node_id"] = pd.to_numeric(df["from_node_id"], errors="coerce")
@@ -392,7 +494,12 @@ def build_interval_link_times(tdmoe_df, sigma):
 
 
 def route_travel_time(links, link_times, free_flow):
-    """Sum of link minutes; links missing from the bin fall back to free-flow."""
+    """Sum of link minutes; links missing from the bin fall back to free-flow.
+
+    Accepted approximation: MATLAB sets tt{i,h} to the mean of agents'
+    experienced travel times for observed routes, while this always sums
+    per-link means.  Close but not identical.
+    """
     total = 0.0
     for key in links:
         if key in link_times:
@@ -413,7 +520,9 @@ def assign_paths(agents, od_routes, free_flow, interval_table, sigma):
     Returns (paths, stats); paths maps agent_id -> (nodes|None, m), where
     None keeps the template path and is counted as a missing OD.  The best
     route is cached per (interval, OD), so each OD is evaluated once per
-    interval rather than once per agent.
+    interval rather than once per agent.  On exact travel-time ties the
+    LATER route wins, matching MATLAB's pre_choice convention (not Python
+    min()'s keep-the-first behavior).
     """
     paths = {}
     n_missing_od = 0
@@ -423,6 +532,15 @@ def assign_paths(agents, od_routes, free_flow, interval_table, sigma):
         m = int(m)
         if m == 0:
             # X_{-1} does not exist: use free-flow (historical) times.
+            # Period-1 substitution (M-RT1): MATLAB sources period-1
+            # information from the UO search's predicted congested
+            # conditions (Each iteration.csv), not free-flow -- measured at
+            # 1.07x-1.95x free-flow at ts = 360, which can flip first-
+            # interval route rankings (~600 agents at sigma = 1).  Rewiring
+            # period-1 sourcing was judged not worth the extra cost; the
+            # free-flow substitution stands.  (Also note this branch is dead
+            # code in practice: departures are 360-420 min, so
+            # floor(t / sigma) >= 36 always.)
             link_times = {}
             n_interval_zero += len(group)
         else:
@@ -435,11 +553,17 @@ def assign_paths(agents, od_routes, free_flow, interval_table, sigma):
             if not routes:
                 best_for_od[tuple(od)] = None
                 continue
-            best = min(
-                routes,
-                key=lambda route: route_travel_time(route[1], link_times, free_flow),
-            )
-            best_for_od[tuple(od)] = best[0]
+            best_nodes = None
+            best_time = None
+            for route in routes:
+                t = route_travel_time(route[1], link_times, free_flow)
+                # On exact ties keep the LATER route, matching MATLAB's
+                # pre_choice convention (keep the old best only on a
+                # strictly smaller new time; take the new route otherwise).
+                if best_time is None or t <= best_time:
+                    best_nodes = route[0]
+                    best_time = t
+            best_for_od[tuple(od)] = best_nodes
         for _, row in group.iterrows():
             nodes = best_for_od.get(tuple(row["_od"]))
             if nodes is None:
@@ -508,7 +632,8 @@ def write_outputs(result_dir, sigma, agents, paths, template_df, meta,
         f.write("agents in demand file: %d\n" % len(agents))
         f.write("agents simulated by DTALite: %d\n" % n_simulated)
         f.write(
-            "agents using free-flow info (interval m = 0): %d\n"
+            "agents in interval m = 0 (free-flow fallback; always 0 here, "
+            "departures start at t = 360 min): %d\n"
             % stats["n_interval_zero"]
         )
         f.write(
@@ -524,11 +649,16 @@ def write_outputs(result_dir, sigma, agents, paths, template_df, meta,
         f.write("per-agent travel time: %.2f min/agent\n" % mine_per_agent_min)
         f.write("\n")
         f.write(
-            "Bingrong (2018) target: %.1f vehicle-hours over %d agents\n"
-            % (target, TARGET_N_AGENTS)
+            "Bingrong (2018) Table 4 target: %.1f vehicle-hours over %d "
+            "agents (actual traffic under true-preference reactions; rough "
+            "comparison -- this run measures predicted traffic under "
+            "shortest-route recommendations)\n" % (target, TARGET_N_AGENTS)
         )
         f.write("target per-agent travel time: %.2f min/agent\n" % target_per_agent_min)
-        f.write("difference vs target (per-agent): %+.1f%%\n" % pct_diff)
+        f.write(
+            "difference vs Table-4 actual-traffic target "
+            "(rough; predicted traffic only): %+.1f%%\n" % pct_diff
+        )
     return routes_path, summary_path, mine_per_agent_min, pct_diff
 
 
@@ -598,6 +728,9 @@ def main(argv=None):
     print("choice set: %d ODs" % len(od_routes))
 
     agents = template_df.sort_values("_departure").reset_index(drop=True)
+    # Left-closed/right-open binning; MATLAB phases are left-open/right-closed,
+    # so t = 360.0 exactly falls in no MATLAB phase.  419/36,030 agents (1.16%)
+    # depart at exact integer minutes -- accepted as negligible.
     agents["interval_m"] = np.floor(
         agents["_departure"].to_numpy() / sigma
     ).astype(int)
@@ -632,21 +765,6 @@ def main(argv=None):
         % (len(tdmoe), len(interval_table))
     )
 
-    # Test 6 (Future Traffic Conditions Estimation): save the Step 1 link
-    # volumes as the "predicted" baseline before Step 2's run_dtalite()
-    # deletes all output_* files.  Step 1's volumes are the historical
-    # conditions the RT system uses to build X_{m-1} guidance.
-    os.makedirs(result_dir, exist_ok=True)
-    predicted_src = os.path.join(data_dir, "output_LinkMOE.csv")
-    if os.path.isfile(predicted_src):
-        shutil.copy(predicted_src,
-                    os.path.join(result_dir, "predicted_LinkMOE.csv"))
-        print("saved predicted link volumes to %s"
-              % os.path.join(result_dir, "predicted_LinkMOE.csv"))
-    else:
-        print("warning: %s not found after Step 1; "
-              "predicted link volumes not saved for Test 6" % predicted_src)
-
     # Step 2: reactive assignment under X_{m-1} -> DTALite once.
     rt_paths, rt_stats = assign_paths(
         agents, od_routes, free_flow, interval_table, sigma
@@ -677,7 +795,7 @@ def main(argv=None):
         "total travel time: %.2f vehicle-hours (%.2f min/agent)"
         % (vehicle_hours, per_agent_min)
     )
-    print("vs Bingrong (2018) target (per-agent): %+.1f%%" % pct_diff)
+    print("vs Bingrong Table-4 actual-traffic target (rough; predicted traffic only): %+.1f%%" % pct_diff)
     print("wrote %s" % routes_path)
     print("wrote %s" % summary_path)
 

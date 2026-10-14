@@ -18,7 +18,7 @@ Sun's 2018 dissertation (Chapter 4, Test 4; after Sheffi 1985):
           falls below 0.01% or the iteration cap is hit. The gap always
           uses FRESH link times from the just-finished DTALite run.
 
-Key assumption (dissertation para 1097): the operator assumes ALL drivers
+Key assumption (dissertation, Chapter 4): the operator assumes ALL drivers
 minimize travel time only. The converged UE routes are written out; they are
 the routes the operator would broadcast as guidance in Test 4. How users with
 true preferences react to that guidance is a separate step (deferred here).
@@ -46,9 +46,17 @@ Merge notes (validator's verdict):
   fixed the _run summary block referencing t_start from main's scope
   (NameError at the end of the run); added a warning when the choice set
   does not hold the expected 576 OD rows.
+  Fix pass (2026-10-13): load_network is bounded to the first link table
+  (the sheet's second sub-table shares (u,v) keys with empty free-flow
+  cells and used to overwrite all good times with NaN); route_time scores
+  pairs missing from both tables as inf instead of 0.0; missing DTALite
+  link outputs now raise UEError instead of a free-flow fallback that
+  could report false convergence; all-NaN vehicle-hours reported as n/a;
+  write_input drops Unnamed:/helper columns; NaN template paths written
+  as empty strings; outputs backed up before overwrite on re-run.
 
 Usage:
-  python winner_ue.py --data-dir <sandbox> [--result-dir results/ue_baseline]
+  python scenarios_ue.py --data-dir <sandbox> [--result-dir results/ue_baseline]
                      [--seed 42] [--max-iters 50] [--gap-threshold 0.0001]
                      [--choice-mat ...] [--demand-csv ...] [--network-xlsx ...]
                      [--exe ...] [--timeout 3600]
@@ -71,6 +79,21 @@ class UEError(Exception):
     """Clean, user-facing failure (bad inputs, DTALite failure, ...)."""
 
 
+def backup_existing(path):
+    """Rename an existing output to a timestamped backup; return its new path."""
+    p = Path(path)
+    if not p.exists():
+        return None
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    target = p.with_name(p.name + ".bak_" + stamp)
+    n = 1
+    while target.exists():
+        n += 1
+        target = p.with_name(p.name + ".bak_%s_%d" % (stamp, n))
+    p.rename(target)
+    return target
+
+
 class Logger(object):
     """Console + run.log logger (from build B)."""
 
@@ -79,6 +102,7 @@ class Logger(object):
         self._fh = None
         if log_path:
             Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+            backup_existing(log_path)
             self._fh = open(log_path, "w")
 
     def __call__(self, msg):
@@ -127,12 +151,22 @@ def load_network(path, log):
         raise UEError("link table in %s lacks init/term node columns" % path)
 
     freeflow = {}
-    n_skipped = 0
+    n_skipped = 0       # rows parsed but with no usable free-flow time
+    n_unparseable = 0   # rows whose init/term node ids would not parse
     for _, row in data.iterrows():
         try:
             u = int(row[c_from])
             v = int(row[c_to])
         except (ValueError, TypeError):
+            n_unparseable += 1
+            if freeflow:
+                # End of the first link table: the standard SiouxFalls sheet
+                # carries a second sub-table further down whose rows share
+                # the same (u, v) keys but have empty free-flow cells. Reading
+                # to the bottom of the sheet would let those rows overwrite
+                # the good times (silently: float(nan) raises nothing and
+                # nan <= 0 is False).
+                break
             continue
         fft = None
         if c_fft is not None:
@@ -140,7 +174,8 @@ def load_network(path, log):
                 fft = float(row[c_fft])
             except (ValueError, TypeError):
                 fft = None
-        if (fft is None or fft <= 0) and c_len is not None and c_spd is not None:
+        if ((fft is None or pd.isna(fft) or fft <= 0)
+                and c_len is not None and c_spd is not None):
             try:
                 length = float(row[c_len])
                 speed = float(row[c_spd])
@@ -148,11 +183,18 @@ def load_network(path, log):
                     fft = length / speed * 60.0
             except (ValueError, TypeError):
                 pass
-        if fft is None or fft <= 0:
+        if fft is None or pd.isna(fft) or fft <= 0:
             # Merge fix: warn instead of silently dropping the link.
             n_skipped += 1
             continue
+        if (u, v) in freeflow:
+            log("warning: duplicate link row for (%d, %d); keeping the first "
+                "free-flow time %.2f" % (u, v, freeflow[(u, v)]))
+            continue
         freeflow[(u, v)] = fft
+    if n_unparseable:
+        log("warning: %d rows had unparseable init/term node ids and were skipped"
+            % n_unparseable)
     if n_skipped:
         log("warning: %d link rows had no usable free-flow time and were skipped"
             % n_skipped)
@@ -233,10 +275,32 @@ def detect_columns(df, log):
     return agent_col, origin_col, dest_col, path_col, dep_col
 
 
-def route_time(link_pairs, link_time, freeflow):
+_missing_link_pairs = set()
+
+
+def route_time(link_pairs, link_time, freeflow, log=None):
+    """Sum travel time over link pairs.
+
+    Pairs missing from both link-time tables used to score 0.0, biasing
+    shortest-path choice *toward* routes over missing links. They now score
+    infinite time instead, and the first miss logs a warning.
+    """
     total = 0.0
     for pair in link_pairs:
-        total += link_time.get(pair, freeflow.get(pair, 0.0))
+        if pair in link_time:
+            total += link_time[pair]
+        elif pair in freeflow:
+            total += freeflow[pair]
+        else:
+            total += float("inf")
+            if pair not in _missing_link_pairs:
+                _missing_link_pairs.add(pair)
+                msg = ("warning: link %s missing from both link-time tables; "
+                       "scoring it as infinite time" % (pair,))
+                if log is None:
+                    print(msg, flush=True)
+                else:
+                    log(msg)
     return total
 
 
@@ -263,7 +327,9 @@ def read_dtalite_csv(path, log):
     return pd.DataFrame(data, columns=header)
 
 
-STALE_OUTPUTS = ("output_agent.csv", "output_link.csv",
+# "output_link.csv" was listed here but DTALite never writes it (dead entry,
+# removed 2026-10-13).
+STALE_OUTPUTS = ("output_agent.csv",
                  "output_LinkTDMOE.csv", "Each iteration.csv")
 
 
@@ -328,6 +394,12 @@ def load_link_times(data_dir, refreshed, freeflow, log):
         cols = list(df.columns)
         lowered = {c: str(c).strip().lower() for c in cols}
 
+        def find_exact(want):
+            for c in cols:
+                if lowered[c] == want:
+                    return c
+            return None
+
         def find(*needles, exclude=()):
             for c in cols:
                 nm = lowered[c]
@@ -335,8 +407,11 @@ def load_link_times(data_dir, refreshed, freeflow, log):
                     return c
             return None
 
-        c_from = find("from", exclude=("transform",))
-        c_to = find("to", exclude=("from",))
+        # Prefer the exact node-id headers: the old substring matcher took
+        # the first column containing "to" but not "from", which could misfire
+        # on a column like total_volume.
+        c_from = find_exact("from_node_id") or find("from", exclude=("transform",))
+        c_to = find_exact("to_node_id") or find("to", exclude=("from",))
         c_tt = find("travel", "time")
         if c_from is None or c_to is None or c_tt is None:
             log("warning: %s lacks link travel-time columns, skipped" % name)
@@ -360,8 +435,11 @@ def load_link_times(data_dir, refreshed, freeflow, log):
         link_time = {(int(u), int(v)): float(t) for (u, v), t in link_time.items()}
         log("link times: %d links from %s" % (len(link_time), name))
         return link_time
-    log("warning: no refreshed link output found, falling back to free-flow times")
-    return dict(freeflow)
+    # No usable link times came out of this DTALite run. Falling back to
+    # free-flow here would let Step-0's free-flow assignment show a zero
+    # relative gap and report a false "converged" with exit 0, so abort.
+    raise UEError("no usable link travel times in this DTALite run "
+                  "(none of the watched link outputs was refreshed)")
 
 
 def vehicle_hours(data_dir, refreshed, log):
@@ -381,8 +459,13 @@ def vehicle_hours(data_dir, refreshed, log):
             break
     if tt_col is None:
         return None, "no travel-time column in output_agent.csv"
+    tt = pd.to_numeric(df[tt_col], errors="coerce")
+    if tt.isna().all():
+        # Summing an all-NaN column yields 0.0, which would be reported as
+        # "0.00 vehicle-hours"; there is really nothing to report.
+        return None, "travel-time column %s is all-NaN in output_agent.csv" % tt_col
     try:
-        total_min = float(pd.to_numeric(df[tt_col], errors="coerce").sum())
+        total_min = float(tt.sum())
     except Exception as exc:
         return None, "could not sum %s (%s)" % (tt_col, exc)
     return total_min / 60.0, "summed %s over %d agents" % (tt_col, len(df))
@@ -473,10 +556,23 @@ def _run(args, data_dir, result_dir, log, t_start):
     n_switch = int(switchable.sum())
     log("agents with a choiceset OD: %d, without: %d (kept on template path)"
         % (n_switch, no_od))
+    # The choice set holds no intrazonal (i, i) routes; flag the agents whose
+    # demand is intrazonal so they are not silently excluded from the UE.
+    n_intrazonal = sum(
+        1 for i in range(n_agents)
+        if agent_od[i] < 0
+        and not pd.isna(origins[i]) and not pd.isna(dests[i])
+        and int(origins[i]) == int(dests[i]))
+    if n_intrazonal:
+        log("warning: %d agents have intrazonal (i,i) demand, which the choice "
+            "set does not cover; they stay on their template path" % n_intrazonal)
     if n_switch == 0:
         raise UEError("no agent maps to a choiceset OD pair")
 
-    template_paths = template[path_col].astype(str).tolist()
+    # A NaN template path would become the literal string "nan"; write it as
+    # an empty path instead.
+    template_paths = [("" if pd.isna(p) else str(p))
+                      for p in template[path_col].tolist()]
     current_route = np.full(n_agents, -1, dtype=int)
     link_time = dict(freeflow)
 
@@ -485,7 +581,7 @@ def _run(args, data_dir, result_dir, log, t_start):
         od = agent_od[i]
         best, best_tt = 0, None
         for r, pairs in enumerate(od_linkpairs[od]):
-            tt = route_time(pairs, link_time, freeflow)
+            tt = route_time(pairs, link_time, freeflow, log)
             if best_tt is None or tt < best_tt:
                 best, best_tt = r, tt
         current_route[i] = best
@@ -502,7 +598,11 @@ def _run(args, data_dir, result_dir, log, t_start):
         return out
 
     def write_input():
-        df = template.copy()
+        # The demand template can carry helper columns (e.g. pandas "Unnamed:"
+        # columns) that must not leak into DTALite's input_agent.csv.
+        df = template.drop(columns=[c for c in template.columns
+                                    if str(c).startswith("Unnamed:")],
+                           errors="ignore").copy()
         df[path_col] = pd.Series(path_strings(), index=df.index)
         df.to_csv(data_dir / "input_agent.csv", index=False, lineterminator="\r\n")
 
@@ -517,7 +617,7 @@ def _run(args, data_dir, result_dir, log, t_start):
             od = agent_od[i]
             best, best_tt = 0, None
             for r, pairs in enumerate(od_linkpairs[od]):
-                tt = route_time(pairs, link_time, freeflow)
+                tt = route_time(pairs, link_time, freeflow, log)
                 if best_tt is None or tt < best_tt:
                     best, best_tt = r, tt
             aux[i] = best
@@ -528,10 +628,10 @@ def _run(args, data_dir, result_dir, log, t_start):
         cur_sum, sp_sum = 0.0, 0.0
         for i in np.flatnonzero(switchable):
             od = agent_od[i]
-            cur_sum += route_time(od_linkpairs[od][current_route[i]], link_time, freeflow)
+            cur_sum += route_time(od_linkpairs[od][current_route[i]], link_time, freeflow, log)
             best_tt = None
             for pairs in od_linkpairs[od]:
-                tt = route_time(pairs, link_time, freeflow)
+                tt = route_time(pairs, link_time, freeflow, log)
                 if best_tt is None or tt < best_tt:
                     best_tt = tt
             sp_sum += best_tt
@@ -575,29 +675,15 @@ def _run(args, data_dir, result_dir, log, t_start):
         log("WARNING: gap %.6f still above %.6f after %d iteration(s) (cap reached)"
             % (gap, args.gap_threshold, iters_done))
 
-    # Test 6 (Future Traffic Conditions Estimation): save the final MSA
-    # iteration link volumes as the "predicted" UE condition.  The reaction
-    # phase (preference_reaction.py) will generate the "actual" volumes.
-    # Copy before anything else touches data_dir.
-    for _link_file in ("output_LinkMOE.csv", "output_link.csv",
-                       "output_LinkTDMOE.csv"):
-        _src = data_dir / _link_file
-        if _src.is_file():
-            shutil.copy(str(_src), str(result_dir / "predicted_LinkMOE.csv"))
-            log("saved predicted link volumes to %s"
-                % (result_dir / "predicted_LinkMOE.csv"))
-            break
-    else:
-        log("warning: no link volume file found after MSA; "
-            "predicted volumes not saved for Test 6")
-
     veh_hours, veh_note = vehicle_hours(data_dir, refreshed, log)
     routes_path = result_dir / "ue_routes.csv"
+    backup_existing(routes_path)
     pd.DataFrame({agent_col: agent_ids,
-                  "path_node_sequence": path_strings()}).to_csv(routes_path, index=False)
+                  path_col: path_strings()}).to_csv(routes_path, index=False)
     log("wrote %s (%d agents)" % (routes_path, n_agents))
 
     summary_path = result_dir / "ue_summary.txt"
+    backup_existing(summary_path)
     with open(summary_path, "w") as fh:
         fh.write("Test 4: UE information baseline (MSA, Sheffi 1985)\n")
         fh.write("seed=%d, max_iters=%d, gap_threshold=%.6f, timeout=%ds\n"
@@ -609,7 +695,8 @@ def _run(args, data_dir, result_dir, log, t_start):
         if veh_hours is None:
             fh.write("vehicle-hours: n/a (%s)\n" % veh_note)
         else:
-            fh.write("vehicle-hours: %.2f (%s)\n" % (veh_hours, veh_note))
+            fh.write("vehicle-hours: %.2f (%.4f per agent; %s)\n"
+                     % (veh_hours, veh_hours / n_agents, veh_note))
         fh.write("elapsed: %.1f min\n" % ((time.time() - t_start) / 60.0))
         fh.write("---- console log ----\n")
         fh.write("\n".join(log.lines) + "\n")

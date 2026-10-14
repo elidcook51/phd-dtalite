@@ -82,6 +82,9 @@ def main():
     )
     args = parser.parse_args()
 
+    if args.iterations < 1:
+        parser.error("--iterations must be >= 1 (got %d)" % args.iterations)
+
     try:
         wanted = parse_bigloops(args.bigloops)
     except ValueError as e:

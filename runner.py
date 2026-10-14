@@ -1,3 +1,21 @@
+# =====================================================================
+# DO NOT RUN -- STALE FILE.
+#
+# Leftover agent-5855 debug from pre-parity smoke testing. The executable
+# body below reads DTALite_Files/0UOinfor_agent.csv just to print agent
+# 5855's UO path, and the real 11-iteration MSA loop is entirely commented
+# out. Running this file does nothing useful -- and crashes with a cryptic
+# error if 0UOinfor_agent.csv is absent.
+#
+# The live entry points are:
+#     wholerunner.py -> runner_parallel.py -> parallel_msa.py      (Test 1)
+#     scenarios_ue.py / scenarios_realtime.py + preference_reaction.py
+#                                                             (Tests 2-4)
+#
+# This file is kept (not renamed) for repo history only. If executed, it
+# raises RuntimeError immediately instead of failing cryptically.
+# =====================================================================
+
 import generate_links
 import assignment
 import msa
@@ -6,14 +24,29 @@ import choiceset
 import shutil
 import os
 
+
+if __name__ == "__main__":
+    raise RuntimeError(
+        "runner.py is STALE -- do not run it (leftover agent-5855 debug; "
+        "the 11-iteration MSA loop is commented out). Use the live entry "
+        "points instead: wholerunner.py -> runner_parallel.py -> "
+        "parallel_msa.py, or scenarios_ue.py / scenarios_realtime.py + "
+        "preference_reaction.py."
+    )
+
+
+# ---------------------------------------------------------------------
+# Original leftover agent-5855 debug body, kept commented for history.
+# ---------------------------------------------------------------------
+
 # generate_links.generate_simple_siouxfalls(mode = 'full')
 
 # Check what tt values were computed for 5855's OD
 # This will tell us if the tt array was populated correctly
-import pandas as pd
-uo = pd.read_csv('DTALite_Files/0UOinfor_agent.csv')
-row = uo[uo['agent_id'].astype(str)=='5855']
-print("5855 UO path:", row.iloc[0]['path_node_sequence'])
+# import pandas as pd
+# uo = pd.read_csv('DTALite_Files/0UOinfor_agent.csv')
+# row = uo[uo['agent_id'].astype(str)=='5855']
+# print("5855 UO path:", row.iloc[0]['path_node_sequence'])
 
 
 

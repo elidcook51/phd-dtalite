@@ -74,6 +74,22 @@ from scipy.io import loadmat, savemat
 import time
 
 
+# DTALite executable. DTALite.exe is a Windows binary; on Linux (e.g. UVA
+# Rivanna) the native DTALite build is preferred, falling back to the Windows
+# exe under Wine. The bare name matters: with cwd='DTALite_Files' the child
+# resolves it *after* chdir, whereas Windows resolves the 'DTALite_Files/...'
+# path against the parent directory. Same rule holds inside the RunX/
+# sandboxes: parallel_msa_ue.py copytrees the whole DTALite_Files/ folder
+# (binary included) and chdirs into RunX/.
+import platform as _platform
+
+if _platform.system() == 'Windows':
+    DTALITE_CMD = ['DTALite_Files/DTALite.exe']
+else:
+    if os.path.isfile(os.path.join('DTALite_Files', 'DTALite')):
+        DTALITE_CMD = ['./DTALite']
+    else:
+        DTALITE_CMD = ['wine', 'DTALite.exe']
 
 
 
@@ -338,6 +354,25 @@ def parse_path_endpoints(raw_path, row_index=None):
 
 
     return nodes[0], nodes[-1], normalized_path
+
+
+
+def stringify_rprime_keys(rprime):
+
+    """Convert rprime's (route, od, interval, itr) tuple keys to strings.
+
+    scipy's savemat silently writes [[None]] for dicts with non-string keys,
+    which would lose the whole per-route/OD/interval demand tensor; string
+    keys round-trip fine. Keys are 0-based (route, od, interval, itr).
+    """
+
+    return {
+
+        f"r{route:03d}_od{od:03d}_t{interval:02d}_itr{itr:02d}": count
+
+        for (route, od, interval, itr), count in rprime.items()
+
+    }
 
 
 
@@ -964,7 +999,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
         subprocess.run(
 
-            [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
+            DTALITE_CMD, cwd = 'DTALite_Files', check = True,
 
             **dtalite_kwargs()
 
@@ -1002,11 +1037,14 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
 
 
-        dd = pd.read_csv('DTALite_Files/output_LinkTDMOE.csv')
+        # MATLAB reads output_LinkMOE.csv col 8 (total_link_volume, one row
+        # per link), not output_LinkTDMOE.csv col 8 (link x timestamp
+        # in-volume). Select the column by name, not position.
+        dd = pd.read_csv('DTALite_Files/output_LinkMOE.csv')
 
 
 
-        linkV.append(dd.iloc[:, 7].to_numpy())
+        linkV.append(dd['total_link_volume'].to_numpy())
 
 
 
@@ -1158,7 +1196,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
     subprocess.run(
 
-        [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
+        DTALITE_CMD, cwd = 'DTALite_Files', check = True,
 
             **dtalite_kwargs()
 
@@ -1278,7 +1316,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
     subprocess.run(
 
-        [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
+        DTALITE_CMD, cwd = 'DTALite_Files', check = True,
 
             **dtalite_kwargs()
 
@@ -1326,7 +1364,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
             'cc': cc,
 
-            'rprime': rprime,
+            'rprime': stringify_rprime_keys(rprime),
 
             'linkV': np.array(linkV, dtype = object),
 

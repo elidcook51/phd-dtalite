@@ -1,7 +1,12 @@
 import numpy as np
 import pandas as pd
 from scipy.io import savemat
-from traveltimecal import traveltimecal, traveltimecal_fast, traveltimecal_fastv2
+from traveltimecal import (
+    traveltimecal,
+    traveltimecal_fast,
+    traveltimecal_fastv2,
+    calculate_path_result_guarded,
+)
 
 def _normalize_nodes(path):
     """Return the node tuple for a choiceset/output path string, or None."""
@@ -122,12 +127,12 @@ def comrealtimeassignment(
 
     # --------------------------------------------------
     # TD-link table
-    # (MATLAB: 'Each iteration.csv' on itr==1 else 'output_linkTDMOE.csv')
+    # (MATLAB: 'Each iteration.csv' on itr==1 else 'output_LinkTDMOE.csv')
     # --------------------------------------------------
     td_file = (
         "DTALite_Files/Each iteration.csv"
         if itr == 1
-        else "DTALite_Files/output_linkTDMOE.csv"
+        else "DTALite_Files/output_LinkTDMOE.csv"
     )
     TDlink = pd.read_csv(
         td_file, usecols=[0, 1, 4, 5], nrows=num_tdlink_rows
@@ -146,6 +151,32 @@ def comrealtimeassignment(
     for row in length:
         if np.all(np.isfinite(row[:4])):
             link_len[(int(row[0]), int(row[1]))] = float(row[2])
+
+    # Dict lookups for calculate_path_result_guarded (shared with
+    # realtimeassignment_fast): (minute, from, to) -> travel time and
+    # (from, to) -> (length, speed limit). Same tables, same layouts.
+    tdlink_map = {
+        (
+            int(row[2]),
+            int(row[0]),
+            int(row[1]),
+        ): float(row[3])
+        for row in TDlink
+        if np.all(np.isfinite(row[:4]))
+    }
+    length_map = {
+        (
+            int(row[0]),
+            int(row[1]),
+        ): (
+            float(row[2]),
+            float(row[3]),
+        )
+        for row in length
+        if np.all(np.isfinite(row[:4]))
+    }
+    # Results are valid only for this call's TDlink table.
+    path_result_cache = {}
 
     # --------------------------------------------------
     # Route attributes: len (distance) and nc (link count)
@@ -201,8 +232,9 @@ def comrealtimeassignment(
                         observed = vals
 
             if observed is None:
-                tt_val, fc_val = traveltimecal_fastv2(
-                    timestamp, TDlink, path, length, gas, itr, 0
+                tt_val, fc_val = calculate_path_result_guarded(
+                    nodes, timestamp, length_map, tdlink_map, gas,
+                    path_result_cache,
                 )
                 tt[(od_idx, route_idx)] = tt_val
                 pltt[(od_idx, route_idx)] = tt_val
@@ -210,8 +242,9 @@ def comrealtimeassignment(
             else:
                 tt[(od_idx, route_idx)] = float(np.mean(observed))
                 pltt[(od_idx, route_idx)] = float(np.max(observed))
-                _, fc_val = traveltimecal_fastv2(
-                    timestamp, TDlink, path, length, gas, itr, 0
+                _, fc_val = calculate_path_result_guarded(
+                    nodes, timestamp, length_map, tdlink_map, gas,
+                    path_result_cache,
                 )
                 fuelcost[(od_idx, route_idx)] = fc_val
 
@@ -226,8 +259,12 @@ def comrealtimeassignment(
     p_idx = np.where(period_mask)[0]
     p_agent = np.column_stack([agent_id_all[p_idx], agent_dep_all[p_idx]])
 
-    rtchoice = np.zeros(len(p_idx), dtype=int)
-    updaterposition = np.zeros(len(p_idx), dtype=int)
+    # -1 marks "no valid route found". Every period agent is
+    # pre-filled with its existing (nchoice, rposition) first, so an
+    # unprocessable realtime agent keeps its prior assignment instead
+    # of the old silent (0, 0) default -- a valid choiceset index.
+    rtchoice = np.full(len(p_idx), -1, dtype=int)
+    updaterposition = np.full(len(p_idx), -1, dtype=int)
     pre_choice = np.zeros(len(p_idx), dtype=int)
 
     realtime_set = set(int(x) for x in np.asarray(realtime_user).ravel())
@@ -237,9 +274,18 @@ def comrealtimeassignment(
     for row, s_row in enumerate(p_idx):
         agent_id = int(agent_id_all[s_row])
 
-        if agent_id not in realtime_set:
+        if (
+            0 <= agent_id < nchoice_arr.size
+            and 0 <= agent_id < rposition_arr.size
+        ):
             rtchoice[row] = int(nchoice_arr[agent_id])
             updaterposition[row] = int(rposition_arr[agent_id])
+
+    for row, s_row in enumerate(p_idx):
+        agent_id = int(agent_id_all[s_row])
+
+        # Non-realtime agents keep the pre-filled assignment above.
+        if agent_id not in realtime_set:
             continue
 
         matches = np.where(
@@ -279,6 +325,12 @@ def comrealtimeassignment(
 
         # The agent's own preference row (MATLAB 1-based IDs).
         pref = int(user[agent_id, 1])
+        if pref < 1:
+            raise ValueError(
+                f"preference id {pref} for agent {agent_id} is below 1; "
+                "weights rows are 1-based, so weights[pref - 1] would "
+                "silently wrap to the last row"
+            )
         wrow = weights[pref - 1, :5]
         dataset2 = pref >= 16650
 
@@ -357,14 +409,17 @@ def realtimeassignment_fast(
     itr : int
         Current assignment iteration.
 
-    choiceset : array-like, shape (n_routes, n_od_pairs)
+    choiceset : array-like, shape (n_od_pairs, n_routes)
+        Transposed convention (same as comrealtimeassignment and
+        msa.py): first index = OD index, second index = route index.
         Each nonempty element is a path string such as "1;2;3;".
 
     routelocation : ndarray
         Expected columns:
             0: origin node
             1: destination node
-            3: choiceset OD-column index
+            3: choiceset route index (second dim)
+            4: choiceset OD index (first dim)
 
     phlength : float
         Assignment period length in minutes.
@@ -390,14 +445,16 @@ def realtimeassignment_fast(
 
     Returns
     -------
-    rtchoice : ndarray, shape (n_period_agents, 1)
-        Selected route index for each agent departing in this period.
+    rtchoice : ndarray, shape (n_period_agents,)
+        Choiceset OD index (first dim) for each agent departing in
+        this period; -1 where no valid route was found.
 
-    updaterposition : ndarray, shape (n_period_agents, 1)
-        Choiceset OD-column index for each selected route.
+    updaterposition : ndarray, shape (n_period_agents,)
+        Choiceset route index (second dim) for each selected route;
+        -1 where no valid route was found.
 
     tt : list[list[dict or None]]
-        Mean route travel time indexed as tt[route][od][period].
+        Mean route travel time indexed as tt[od][route][period].
 
     b : ndarray
         First TD-link column, preserved from the original function.
@@ -455,78 +512,6 @@ def realtimeassignment_fast(
 
         return nodes
 
-    def calculate_path_result(path_nodes, departure_time):
-        """
-        Calculate time-dependent path travel time and fuel cost.
-
-        This uses local lookup tables that are rebuilt for the current
-        function call. That is important because TDlink changes between
-        DTALite iterations.
-        """
-        cache_key = (int(np.floor(departure_time)), path_nodes)
-
-        cached_result = path_result_cache.get(cache_key)
-        if cached_result is not None:
-            return cached_result
-
-        total_time = 0.0
-        fuel_cost = 0.0
-
-        for from_node, to_node in zip(path_nodes[:-1], path_nodes[1:]):
-            link_info = length_map.get((from_node, to_node))
-
-            current_time = int(
-                np.floor(float(departure_time) + total_time)
-            )
-
-            travel_time = tdlink_map.get(
-                (current_time, from_node, to_node)
-            )
-
-            if travel_time is None or not np.isfinite(travel_time):
-                if link_info is None:
-                    travel_time = 1.0
-                else:
-                    link_length, speed_limit = link_info
-
-                    if speed_limit > 0:
-                        travel_time = (
-                            link_length / speed_limit * 60.0
-                        )
-                    else:
-                        travel_time = 1.0
-
-            travel_time = float(travel_time)
-
-            # Protect the speed and fuel calculations from zero or
-            # negative TD-link travel times.
-            if travel_time <= 0:
-                if link_info is not None and link_info[1] > 0:
-                    travel_time = (
-                        link_info[0] / link_info[1] * 60.0
-                    )
-                else:
-                    travel_time = 1.0
-
-            total_time += travel_time
-
-            if link_info is not None:
-                link_length = link_info[0]
-                actual_speed = link_length / travel_time * 60.0
-
-                if actual_speed > 40.0:
-                    mpg = 32.0
-                elif actual_speed < 25.0:
-                    mpg = 22.0
-                else:
-                    mpg = 27.0
-
-                fuel_cost += link_length / mpg * gas
-
-        result = (total_time, fuel_cost)
-        path_result_cache[cache_key] = result
-        return result
-
     # ---------------------------------------------------------
     # Validate and normalize choiceset
     # ---------------------------------------------------------
@@ -537,16 +522,16 @@ def realtimeassignment_fast(
     if choiceset.ndim != 2:
         raise ValueError(
             "choiceset must be a two-dimensional array with shape "
-            "(number of routes, number of OD columns)."
+            "(number of OD pairs, number of routes)."
         )
 
-    if routelocation.ndim != 2 or routelocation.shape[1] < 4:
+    if routelocation.ndim != 2 or routelocation.shape[1] < 5:
         raise ValueError(
             "routelocation must be a two-dimensional array with at "
-            "least four columns."
+            "least five columns."
         )
 
-    n_routes, n_ods = choiceset.shape
+    n_ods, n_routes = choiceset.shape
     period_key = int(itr * phlength)
     td_departure_time = period_key + 359
     gas = 3.0
@@ -584,11 +569,6 @@ def realtimeassignment_fast(
 
         output_agent_ids = pd.to_numeric(
             output_agent_df.iloc[:, 0],
-            errors="coerce",
-        ).to_numpy()
-
-        output_departures = pd.to_numeric(
-            output_agent_df.iloc[:, 1],
             errors="coerce",
         ).to_numpy()
 
@@ -657,7 +637,7 @@ def realtimeassignment_fast(
     if itr == 1:
         td_file = "DTALite_Files/Each iteration.csv"
     else:
-        td_file = "DTALite_Files/output_linkTDMOE.csv"
+        td_file = "DTALite_Files/output_LinkTDMOE.csv"
 
     td_df = pd.read_csv(
         td_file,
@@ -719,25 +699,25 @@ def realtimeassignment_fast(
     # Parse unique paths and calculate static route attributes
     # ---------------------------------------------------------
 
-    len_arr = np.zeros((n_routes, n_ods), dtype=float)
-    nc = np.zeros((n_routes, n_ods), dtype=float)
+    len_arr = np.zeros((n_ods, n_routes), dtype=float)
+    nc = np.zeros((n_ods, n_routes), dtype=float)
 
-    path_nodes_matrix = np.empty((n_routes, n_ods), dtype=object)
+    path_nodes_matrix = np.empty((n_ods, n_routes), dtype=object)
     path_nodes_matrix.fill(None)
 
     # Cache static route attributes for duplicate path strings.
     static_path_cache = {}
 
-    for route_index in range(n_routes):
-        for od_index in range(n_ods):
+    for od_index in range(n_ods):
+        for route_index in range(n_routes):
             path_nodes = normalize_path(
-                choiceset[route_index, od_index]
+                choiceset[od_index, route_index]
             )
 
             if path_nodes is None:
                 continue
 
-            path_nodes_matrix[route_index, od_index] = path_nodes
+            path_nodes_matrix[od_index, route_index] = path_nodes
 
             static_result = static_path_cache.get(path_nodes)
 
@@ -757,44 +737,44 @@ def realtimeassignment_fast(
                 static_result = (total_length, link_count)
                 static_path_cache[path_nodes] = static_result
 
-            len_arr[route_index, od_index] = static_result[0]
-            nc[route_index, od_index] = static_result[1]
+            len_arr[od_index, route_index] = static_result[0]
+            nc[od_index, route_index] = static_result[1]
 
     # ---------------------------------------------------------
     # Calculate travel time, maximum travel time, and fuel cost
     # ---------------------------------------------------------
 
     tt = [
-        [None for _ in range(n_ods)]
-        for _ in range(n_routes)
+        [None for _ in range(n_routes)]
+        for _ in range(n_ods)
     ]
 
     pltt = [
-        [None for _ in range(n_ods)]
-        for _ in range(n_routes)
+        [None for _ in range(n_routes)]
+        for _ in range(n_ods)
     ]
 
     fuelcost = [
-        [None for _ in range(n_ods)]
-        for _ in range(n_routes)
+        [None for _ in range(n_routes)]
+        for _ in range(n_ods)
     ]
 
     # Dense arrays are faster for best-route selection, while the
     # nested list/dictionary objects preserve the original output type.
     current_tt = np.full(
-        (n_routes, n_ods),
+        (n_ods, n_routes),
         np.inf,
         dtype=float,
     )
 
     current_pltt = np.full(
-        (n_routes, n_ods),
+        (n_ods, n_routes),
         np.inf,
         dtype=float,
     )
 
     current_fuelcost = np.full(
-        (n_routes, n_ods),
+        (n_ods, n_routes),
         np.nan,
         dtype=float,
     )
@@ -802,16 +782,16 @@ def realtimeassignment_fast(
     # Calculate each unique path result only once.
     unique_route_results = {}
 
-    for route_index in range(n_routes):
-        for od_index in range(n_ods):
+    for od_index in range(n_ods):
+        for route_index in range(n_routes):
             path_nodes = path_nodes_matrix[
-                route_index, od_index
+                od_index, route_index
             ]
 
             if path_nodes is None:
                 continue
 
-            _raw_path = choiceset[route_index, od_index]
+            _raw_path = choiceset[od_index, route_index]
             if not isinstance(_raw_path, str):
                 _raw_path = str(_raw_path)
             observed_result = path_observations.get(_raw_path.strip())
@@ -819,9 +799,13 @@ def realtimeassignment_fast(
             calculated_result = unique_route_results.get(path_nodes)
 
             if calculated_result is None:
-                calculated_result = calculate_path_result(
+                calculated_result = calculate_path_result_guarded(
                     path_nodes,
                     td_departure_time,
+                    length_map,
+                    tdlink_map,
+                    gas,
+                    path_result_cache,
                 )
                 unique_route_results[path_nodes] = calculated_result
 
@@ -837,21 +821,21 @@ def realtimeassignment_fast(
             maximum_tt = float(maximum_tt)
             fuel_value = float(fuel_value)
 
-            tt[route_index][od_index] = {
+            tt[od_index][route_index] = {
                 period_key: mean_tt
             }
 
-            pltt[route_index][od_index] = {
+            pltt[od_index][route_index] = {
                 period_key: maximum_tt
             }
 
-            fuelcost[route_index][od_index] = {
+            fuelcost[od_index][route_index] = {
                 period_key: fuel_value
             }
 
-            current_tt[route_index, od_index] = mean_tt
-            current_pltt[route_index, od_index] = maximum_tt
-            current_fuelcost[route_index, od_index] = fuel_value
+            current_tt[od_index, route_index] = mean_tt
+            current_pltt[od_index, route_index] = maximum_tt
+            current_fuelcost[od_index, route_index] = fuel_value
 
     # ---------------------------------------------------------
     # Select agents departing in the current period
@@ -911,24 +895,12 @@ def realtimeassignment_fast(
     # Assign routes to current-period agents
     # ---------------------------------------------------------
 
-    nchoice_array = np.asarray(nchoice).reshape(-1)
-    rposition_array = np.asarray(rposition).reshape(-1)
-
     for period_row, agent_record in enumerate(p_agent):
         agent_id = int(agent_record[0])
 
-        # Preserve the existing route for non-realtime agents.
+        # Non-realtime agents already carry their existing assignment
+        # from the pre-fill above; only realtime agents are updated.
         if agent_id not in realtime_set:
-            if (
-                0 <= agent_id < nchoice_array.size
-                and 0 <= agent_id < rposition_array.size
-            ):
-                rtchoice[period_row] = int(
-                    nchoice_array[agent_id]
-                )
-                updaterposition[period_row] = int(
-                    rposition_array[agent_id]
-                )
             continue
 
         agent_row = agent_id_to_row.get(agent_id)

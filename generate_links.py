@@ -1,7 +1,25 @@
 import pandas as pd
 import numpy as np
 import time
+import argparse
+import os
 from pathlib import Path
+
+
+_FORCE_YES = False
+
+
+def _confirm_proceed(question = 'Proceed? (yes/no): '):
+    """Return True unless the user cancels at the prompt.
+
+    The prompt is skipped (auto-yes) when the GENERATE_LINKS_YES=1
+    environment variable is set or the --yes CLI flag was passed, so
+    headless / Rivanna / batch runs don't block forever on input().
+    """
+    if _FORCE_YES or os.environ.get('GENERATE_LINKS_YES') == '1':
+        return True
+
+    return input(question).lower() == 'yes'
 
 def generate_simple_baltimore(mode = 'test'):
 
@@ -18,8 +36,7 @@ def generate_simple_baltimore(mode = 'test'):
         n_links = np.inf
         output_file = 'Each_iteration.csv'
 
-        response = input('Proceed? (yes/no): ')
-        if response.lower() != 'yes':
+        if not _confirm_proceed('Proceed? (yes/no): '):
             print('Cancelled.')
             return
 
@@ -137,8 +154,7 @@ def generate_simple_siouxfalls(mode = 'test'):
         output_file = 'Sioux_Falls_travel_time.csv'
 
         print('This is not test mode')
-        response = input('Proceed? (yes/no): ')
-        if response.lower() != 'yes':
+        if not _confirm_proceed('Proceed? (yes/no): '):
             print('Cancelled.')
             return
 
@@ -242,3 +258,34 @@ def generate_simple_siouxfalls(mode = 'test'):
     elapsed_total = time.time() - start_clock
 
     print(f'Finished with total time {elapsed_total}')
+
+def main(argv = None):
+    ap = argparse.ArgumentParser(
+        description = 'Write synthetic time-invariant LinkTDMOE CSVs '
+                      '(free-flow smoke-test baseline).'
+    )
+    ap.add_argument(
+        '--yes', action = 'store_true',
+        help = 'skip the Proceed? prompt (same as GENERATE_LINKS_YES=1)'
+    )
+    ap.add_argument(
+        'network', choices = ['baltimore', 'siouxfalls'],
+        help = 'which network generator to run'
+    )
+    ap.add_argument(
+        'mode', nargs = '?', default = 'test', choices = ['test', 'full'],
+        help = 'test = 100-link smoke test (default); full = whole network'
+    )
+    args = ap.parse_args(argv)
+
+    global _FORCE_YES
+    _FORCE_YES = args.yes
+
+    if args.network == 'baltimore':
+        generate_simple_baltimore(mode = args.mode)
+    else:
+        generate_simple_siouxfalls(mode = args.mode)
+
+
+if __name__ == '__main__':
+    main()
