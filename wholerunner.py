@@ -1331,6 +1331,71 @@ def main(argv=None):
     max_workers = args.max_workers or min(4, max(1, n_jobs))
 
     if n_jobs:
+        # Track whether Test 6 has been triggered (it runs as soon as
+        # Tests 1-4 are all collected, without waiting for the 5P sweep).
+        test6_done = False
+        tests_14 = [t for t in tests if t in (1, 2, 3, 4)]
+
+        def _maybe_run_test6():
+            """Run Test 6 if all selected Tests 1-4 are done+collected."""
+            nonlocal test6_done
+            if test6_done or 6 not in tests:
+                return
+            if not tests_14:
+                return
+            if not all(outcomes.get(t) for t in tests_14):
+                return
+            test6_done = True
+            try:
+                ok6, dt6 = run_test6(results_root, tracker)
+                outcomes[6] = ok6
+            except RuntimeError as e:
+                log("Test 6: %s" % e)
+                outcomes[6] = False
+            except Exception as e:  # pragma: no cover - defensive
+                log("Test 6: unexpected error: %s" % e)
+                outcomes[6] = False
+
+        def _collect_now(kind, key):
+            """Collect results immediately for a finished job.
+
+            Returns True on success; False if collection itself failed
+            (which marks the job as failed).
+            """
+            if kind == "test":
+                t = key
+                sandbox = sandboxes[t]
+                label = "Test %d" % t
+                try:
+                    if t == 1:
+                        collect_1(sandbox, results_root)
+                    else:
+                        collect_234(t, sandbox, results_root)
+                except Exception as e:
+                    print("ERROR: result collection failed for test %d: %s"
+                          % (t, e), file=sys.stderr)
+                    return False
+            else:  # sweep 5P
+                sandbox = sandboxes["5P"]
+                label = "Test 5 (proposed sweep)"
+                try:
+                    collect_5("P", sandbox, results_root)
+                except Exception as e:
+                    print("ERROR: result collection failed for Test 5 "
+                          "proposed sweep: %s" % e, file=sys.stderr)
+                    return False
+            if not args.keep_temp:
+                try:
+                    shutil.rmtree(sandbox)
+                except Exception as e:
+                    log("WARNING: could not remove sandbox %s: %s"
+                        % (sandbox, e))
+                else:
+                    log("%s: sandbox removed" % label)
+            else:
+                log("%s: sandbox kept (--keep-temp): %s" % (label, sandbox))
+            return True
+
         with concurrent.futures.ThreadPoolExecutor(
                 max_workers=max_workers) as ex:
             futures = {}
@@ -1352,60 +1417,33 @@ def main(argv=None):
                     if tracker:
                         tracker.finish(key, False)
                     ok, dt = False, 0.0
+                if ok:
+                    # Collect immediately; a collection failure marks the
+                    # job as failed.
+                    if not _collect_now(kind, key):
+                        ok = False
+                    elif tracker:
+                        tracker.update(key, None, "done (collected)")
+                else:
+                    sb = (sandboxes[key] if kind == "test"
+                          else sandboxes["5P"])
+                    print("%s FAILED -- sandbox kept for debugging: %s"
+                          % (key, sb))
                 if kind == "test":
                     outcomes[key] = ok
                 else:
                     sweep_outcomes["P"] = ok
+                # Test 6 triggers as soon as Tests 1-4 are collected,
+                # without waiting for the 5P sweep to finish.
+                _maybe_run_test6()
     else:
         log("Phase A: no jobs to run")
+        test6_done = False
 
-    # ---- Phase A collection (in test order; keep failed sandboxes) ----
-    for t in tests:
-        if t not in (1, 2, 3, 4):
-            continue
-        sandbox = sandboxes[t]
-        if not outcomes[t]:
-            print("Test %d FAILED -- sandbox kept for debugging: %s"
-                  % (t, sandbox))
-            continue
-        try:
-            if t == 1:
-                collect_1(sandbox, results_root)
-            else:
-                collect_234(t, sandbox, results_root)
-        except Exception as e:
-            print("ERROR: result collection failed for test %d: %s"
-                  % (t, e), file=sys.stderr)
-            outcomes[t] = False
-            continue
-        if not args.keep_temp:
-            shutil.rmtree(sandbox)
-            log("test %d: sandbox removed" % t)
-        else:
-            log("test %d: sandbox kept (--keep-temp): %s" % (t, sandbox))
-
-    if 5 in tests:
-        sandbox = sandboxes["5P"]
-        if not sweep_outcomes["P"]:
-            print("Test 5 (proposed sweep) FAILED -- sandbox kept for "
-                  "debugging: %s" % sandbox)
-        else:
-            try:
-                collect_5("P", sandbox, results_root)
-            except Exception as e:
-                print("ERROR: result collection failed for Test 5 proposed "
-                      "sweep: %s" % e, file=sys.stderr)
-                sweep_outcomes["P"] = False
-            else:
-                if not args.keep_temp:
-                    shutil.rmtree(sandbox)
-                    log("test 5P: sandbox removed")
-                else:
-                    log("test 5P: sandbox kept (--keep-temp): %s" % sandbox)
-
-    # ---- Test 6 (after Phase A collection; independent of Test 5) ----
-    # Runs in the main thread: the display thread keeps rendering.
-    if 6 in tests:
+    # Test 6 fallback: if it wasn't triggered inside the loop (e.g. no
+    # Phase A jobs ran, or Tests 1-4 were not all selected), try it now
+    # against whatever results exist.
+    if 6 in tests and not (n_jobs and test6_done):
         try:
             ok6, dt6 = run_test6(results_root, tracker)
             outcomes[6] = ok6
@@ -1417,6 +1455,8 @@ def main(argv=None):
             outcomes[6] = False
 
     # ---- Test 5 Phase B (UE sweep, then aggregation) ----
+    # (Test 6 already ran above: either triggered inside the Phase A loop
+    # as soon as Tests 1-4 were collected, or via the fallback.)
     if 5 in tests:
         try:
             ue_routes = resolve_ue_routes(tests, outcomes, results_root,
