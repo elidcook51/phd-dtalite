@@ -82,9 +82,6 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.iterations < 1:
-        parser.error("--iterations must be >= 1 (got %d)" % args.iterations)
-
     try:
         wanted = parse_bigloops(args.bigloops)
     except ValueError as e:
@@ -128,4 +125,25 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # os._exit (not sys.exit): after main() returns, all results are
+    # collected and sandboxes cleaned up. sys.exit() would run the
+    # concurrent.futures atexit handler, which re-joins the executor's
+    # management thread with wait=True -- hanging forever if any worker
+    # was killed or is stuck. os._exit skips atexit entirely.
+    try:
+        _rc = main()
+    except SystemExit as _e:
+        _rc = _e.code
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        _rc = 1
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+    os._exit(_rc if isinstance(_rc, int) else (0 if _rc is None else 1))

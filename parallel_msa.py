@@ -46,15 +46,8 @@ helper that reproduces ``runner.py``'s (p, p_fix, p_realtime) schedule.
 
 Notes
 -----
-* The simulator subprocess is launched via ``msa.DTALITE_CMD``: the native
-  ``DTALite`` binary on Linux (e.g. UVA Rivanna), ``wine DTALite.exe`` as a
-  fallback, or ``DTALite.exe`` on Windows. The sandboxing itself works on
-  any OS.
-* Sandbox names are ``Run{bigloop}`` with no per-invocation uniqueness: do
-  not run two ``run_parallel_msa`` calls concurrently against the same
-  ``repo_root`` -- they would ``rmtree`` each other's live sandboxes. The
-  collect logic depends on the ``Run{bigloop}`` names, so the names are
-  deliberately not made unique.
+* ``DTALite.exe`` is a Windows binary; the sandboxing works on any OS, but
+  the actual simulator subprocess only runs where the .exe runs (Windows).
 * On Windows, ``multiprocessing`` uses the *spawn* start method, so worker
   entry points must be importable top-level functions (they are) and scripts
   launching the pool need the ``if __name__ == "__main__":`` guard
@@ -63,6 +56,7 @@ Notes
 
 import concurrent.futures
 import contextlib
+import multiprocessing
 import os
 import shutil
 import warnings
@@ -85,14 +79,6 @@ SOURCE_DIR = "DTALite_Files"
 #: Sandbox folders are named ``Run0``, ``Run1``, ... under the repo root.
 SANDBOX_PREFIX = "Run"
 
-#: Per-bigloop watchdog for the ``as_completed`` loop in
-#: ``run_parallel_msa``.  A full bigloop runs 20 DTALite invocations
-#: (~10-20 min on the 54k workload), so this is ~2x the expected runtime.
-#: The native DTALite binary *hangs indefinitely* (instead of erroring)
-#: when ``input_agent.csv`` is missing, so without this a wedged worker
-#: would stall executor shutdown forever with no diagnostic.
-BIGLOOP_TIMEOUT_S = 3600
-
 #: Files written by the pipeline that carry no per-iteration tag.  In the
 #: serial runner the final on-disk state of these is whatever the *last*
 #: iteration wrote, so the parallel orchestrator reproduces that by copying
@@ -102,6 +88,13 @@ SHARED_RESULT_NAMES = [
     "UOinfor_LinkMOE.csv",
     "UOinfor_LinkTDMOE.csv",
 ]
+
+# A single bigloop that produces no result within this long is treated
+# as hung: fail with a clear error instead of blocking forever (which
+# used to hang runner_parallel.py -- and therefore wholerunner --
+# indefinitely at 100%%).
+BIGLOOP_TIMEOUT_S = 3600
+
 
 
 def _result_names(bigloop):
@@ -169,10 +162,6 @@ def collect_results(run_dir, bigloop, dest_dir=SOURCE_DIR):
     Files that were not produced (e.g. ``pathinfo_ass{i}.mat`` is only
     written for ``itr == 18``) are skipped with a warning.  Returns the list
     of files actually copied.
-
-    NOTE: a silently under-producing worker still reports success here --
-    missing files only warn.  A future strict mode could take a manifest of
-    must-have files and raise instead of warning.
     """
     src_dir = os.path.join(os.path.abspath(run_dir), SOURCE_DIR)
     dest_dir = os.path.abspath(dest_dir)
@@ -253,13 +242,11 @@ def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
         disk for inspection instead of deleting it.
     cleanup : if False, the sandbox is left on disk even on success (used
         by ``run_parallel_msa`` to harvest shared result files afterwards).
-    msa_fn : optional ``(bigloop, p, p_fix, p_realtime[, seed])`` callable
-        used instead of ``msa.msa``.  The hook is tried with ``seed=seed``
-        first and retried without it on ``TypeError``, so older 4-arg fakes
-        keep working.  Testing hook: on Windows (spawn start method)
-        monkeypatching ``msa.msa`` does not propagate into worker processes,
-        so pass the fake explicitly.  Must be a top-level function to
-        survive pickling to the workers.
+    msa_fn : optional ``(bigloop, p, p_fix, p_realtime)`` callable used
+        instead of ``msa.msa``.  Testing hook: on Windows (spawn start
+        method) monkeypatching ``msa.msa`` does not propagate into worker
+        processes, so pass the fake explicitly.  Must be a top-level
+        function to survive pickling to the workers.
     seed : RNG seed for ``dividerand`` (user-type assignment). Default: 1.
     """
     run_id = bigloop if run_id is None else run_id
@@ -275,14 +262,7 @@ def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
                 os.path.join(SOURCE_DIR, "input_agent.csv"),
             )
             if msa_fn is not None:
-                # Test hook: newer fakes accept seed= like msa.msa does.
-                try:
-                    msa_fn(bigloop, p, p_fix, p_realtime, seed=seed)
-                except TypeError:
-                    # Fall back to the 4-arg call for older test hooks.
-                    # (A TypeError raised from *inside* the hook is retried
-                    # here too; the 4-arg call then surfaces it.)
-                    msa_fn(bigloop, p, p_fix, p_realtime)
+                msa_fn(bigloop, p, p_fix, p_realtime)
             else:
                 _msa_mod.msa(bigloop, p, p_fix, p_realtime, seed=seed)
 
@@ -438,9 +418,9 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
         copy of ``DTALite.exe``, so size this to your CPU/RAM.
     repo_root : repo root containing ``DTALite_Files/``; defaults to cwd.
     keep_on_failure : keep failed runs' ``RunX/`` folders for inspection.
-    msa_fn : optional ``(bigloop, p, p_fix, p_realtime[, seed])`` callable
-        used instead of ``msa.msa`` in every worker (testing hook; must be
-        a top-level function to survive pickling).
+    msa_fn : optional ``(bigloop, p, p_fix, p_realtime)`` callable used
+        instead of ``msa.msa`` in every worker (testing hook; must be a
+        top-level function to survive pickling).
     seed : RNG seed for ``dividerand`` (user-type assignment). Default: 1.
 
     Returns
@@ -477,39 +457,49 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
 
     results = []
     futures = {}
-    executor = None
     try:
-        # The executor is managed manually (not a with-block) so a wedged
-        # worker can never stall shutdown: the except path below refuses to
-        # wait for stragglers, and the worker processes are daemons that die
-        # with this process.
         executor = concurrent.futures.ProcessPoolExecutor(
             max_workers=max_workers
         )
-        futures = {
-            executor.submit(_msa_worker, task): task for task in tasks
-        }
-        for future in concurrent.futures.as_completed(futures):
-            task = futures[future]
-            try:
-                results.append(future.result(timeout=BIGLOOP_TIMEOUT_S))
-            except concurrent.futures.TimeoutError as exc:
-                raise RuntimeError(
-                    f"Parallel MSA run timed out after {BIGLOOP_TIMEOUT_S}s "
-                    f"for bigloop={task['bigloop']} "
-                    f"(sandbox Run{task['run_id']}). The worker's DTALite "
-                    f"subprocess may be hung (the native binary hangs "
-                    f"indefinitely instead of erroring when input_agent.csv "
-                    f"is missing); the sandbox is kept for inspection when "
-                    f"keep_on_failure is True."
-                ) from exc
-            except Exception as exc:
-                raise RuntimeError(
-                    f"Parallel MSA run failed for bigloop={task['bigloop']} "
-                    f"(sandbox Run{task['run_id']})."
-                ) from exc
-
-        executor.shutdown(wait=True)
+        try:
+            futures = {
+                executor.submit(_msa_worker, task): task for task in tasks
+            }
+            pending = set(futures)
+            while pending:
+                # wait() (not as_completed) so a hung worker cannot block
+                # the loop forever: after BIGLOOP_TIMEOUT_S with futures
+                # still pending, fail fast naming the stuck bigloops.
+                done, pending = concurrent.futures.wait(
+                    pending, timeout=BIGLOOP_TIMEOUT_S,
+                    return_when=concurrent.futures.ALL_COMPLETED)
+                for future in done:
+                    task = futures[future]
+                    try:
+                        results.append(future.result())
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"Parallel MSA run failed for bigloop={task['bigloop']} "
+                            f"(sandbox Run{task['run_id']})."
+                        ) from exc
+                if pending:
+                    hung = sorted(futures[f]["bigloop"] for f in pending)
+                    raise RuntimeError(
+                        f"Parallel MSA timed out after {BIGLOOP_TIMEOUT_S}s "
+                        f"waiting for bigloops={hung} "
+                        f"(sandbox(s) {[futures[f]['run_id'] for f in pending]})."
+                    )
+        finally:
+            # Never block forever on stuck workers: cancel what has not
+            # started and do NOT wait for running workers. Then terminate
+            # any workers still alive (e.g. hung in a task) so they do
+            # not linger as orphans after this process exits.
+            executor.shutdown(wait=False, cancel_futures=True)
+            for _child in multiprocessing.active_children():
+                try:
+                    _child.terminate()
+                except Exception:
+                    pass
 
         # Mimic serial semantics: shared result files come from the last
         # (highest bigloop) iteration.
@@ -519,18 +509,16 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
             dest_dir=os.path.join(repo_root, SOURCE_DIR),
         )
         return results
-    except BaseException:
-        # Never let a wedged worker stall shutdown: do not wait for
-        # stragglers.
-        if executor is not None:
-            executor.shutdown(wait=False, cancel_futures=True)
-        raise
     finally:
-        # A timed-out worker's future may still be pending here, so not
-        # every future is done; classify each run by its actual outcome
-        # rather than by consumed results.
+        # The inner finally already shut the executor down without waiting,
+        # so some futures may be unfinished/cancelled here; classify each
+        # run by its actual outcome rather than by consumed results.
         for fut, task in futures.items():
-            succeeded = fut.done() and fut.exception() is None
+            try:
+                succeeded = (fut.done() and not fut.cancelled()
+                             and fut.exception() is None)
+            except Exception:
+                succeeded = False
             run_dir = sandbox_path(task["run_id"], repo_root)
             if os.path.exists(run_dir):
                 if succeeded or not keep_on_failure:

@@ -657,9 +657,118 @@ def test5_commands(sub, sandbox, seed, ue_routes_path=None):
 # ----------------------------------------------------------------------
 # Execution (shared Popen engine; one thread per job)
 # ----------------------------------------------------------------------
+# Subprocess I/O strategy: the child writes DIRECTLY to run.log (a file);
+# the parent polls the file for new lines. Pipes are deliberately NOT used.
+# On Windows, if the child exits while one of its own descendants still
+# holds the pipe open, the reader never sees EOF; worse, if the child
+# itself hangs (e.g. ProcessPoolExecutor.shutdown(wait=True) waiting on a
+# stuck worker), proc.poll() stays None forever, so no pipe-EOF grace
+# period can ever fire. A file cannot deadlock in either case.
+#
+# Two timeouts guarantee forward progress:
+#   _RUN_STALL_S: no new output for this long -> kill the process tree and
+#                 mark the job failed. (Tests 1-5 all print tqdm/line
+#                 progress every few seconds in normal operation.)
+#   _RUN_ABS_S:   absolute backstop per _run_commands call.
+_RUN_POLL_S = 2.0
+_RUN_STALL_S = 30 * 60
+_RUN_ABS_S = 18 * 3600
+
+
+def _kill_proc_tree(proc):
+    """Best-effort kill of a subprocess and its children."""
+    if sys.platform == "win32":
+        # /T kills the whole tree (ProcessPoolExecutor workers too).
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=30)
+        except Exception:
+            pass
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.wait(timeout=30)
+    except Exception:
+        pass
+
+
+def _poll_process(label, key, cmd_idx, proc, log_path, parse_line):
+    """Poll log_path for new output lines and proc for exit.
+
+    Returns (returncode, killed, kill_reason). `killed` is True when the
+    process had to be killed (stall or absolute timeout); otherwise the
+    process exited on its own.
+    """
+    pos = 0  # header lines ("### ...") match no progress regex; harmless
+    last_out = time.monotonic()
+    abs_deadline = last_out + _RUN_ABS_S
+    killed = False
+    kill_why = ""
+    rc = None
+    with open(log_path, "r", encoding="utf-8", errors="replace") as rf:
+        while True:
+            rf.seek(pos)
+            try:
+                chunk = rf.read()
+            except Exception:
+                chunk = ""
+            if chunk:
+                pos = rf.tell()
+                last_out = time.monotonic()
+                # tqdm writes \r-separated bar updates with no \n; split
+                # on both so progress markers are seen promptly.
+                for piece in re.split(r"[\r\n]+", chunk):
+                    if piece.strip():
+                        parse_line(cmd_idx, piece)
+            rc = proc.poll()
+            if rc is not None:
+                # Final drain: the child may have written between our
+                # last read and its exit.
+                rf.seek(pos)
+                try:
+                    chunk = rf.read()
+                except Exception:
+                    chunk = ""
+                if chunk:
+                    for piece in re.split(r"[\r\n]+", chunk):
+                        if piece.strip():
+                            parse_line(cmd_idx, piece)
+                break
+            now = time.monotonic()
+            if now - last_out > _RUN_STALL_S:
+                kill_why = ("no output for %s; killed stuck process"
+                            % fmt_min(_RUN_STALL_S))
+                log("ERROR: %s: %s" % (label, kill_why))
+                _kill_proc_tree(proc)
+                killed = True
+                rc = proc.poll()
+                break
+            if now > abs_deadline:
+                kill_why = ("exceeded absolute timeout %s; killed process"
+                            % fmt_min(_RUN_ABS_S))
+                log("ERROR: %s: %s" % (label, kill_why))
+                _kill_proc_tree(proc)
+                killed = True
+                rc = proc.poll()
+                break
+            time.sleep(_RUN_POLL_S)
+    if rc is None:
+        # Kill did not yield a returncode; treat as failure regardless.
+        rc = -1
+    return rc, killed, kill_why
+
+
 def _run_commands(label, sandbox, cmds, tracker, key, parse_line):
-    """Run cmds sequentially in sandbox; each stdout line is appended to
-    run.log and passed to parse_line(cmd_idx, line). Returns (ok, elapsed)."""
+    """Run cmds sequentially in sandbox; new run.log lines are passed to
+    parse_line(cmd_idx, line). Returns (ok, elapsed).
+
+    Never hangs indefinitely: a process that produces no output for
+    _RUN_STALL_S is killed, and _RUN_ABS_S bounds the whole call.
+    """
     log_path = os.path.join(sandbox, "run.log")
     quiet = tracker is not None
     if tracker:
@@ -670,97 +779,42 @@ def _run_commands(label, sandbox, cmds, tracker, key, parse_line):
     else:
         tracker.update(key, 0.0, "starting...")
     try:
-        with open(log_path, "w", encoding="utf-8", errors="replace") as logfh:
-            for cmd_idx, (cmd, desc) in enumerate(cmds):
-                step0 = time.time()
-                if not quiet:
-                    log("%s: %s ..." % (label, desc))
-                else:
-                    tracker.update(key, None, desc)
-                proc = subprocess.Popen(
-                    cmd, cwd=sandbox,
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, bufsize=1, errors="replace")
-                # Read stdout in a daemon thread. A bare readline() here
-                # can block forever: on Windows a child that exits while
-                # one of its own descendants still holds the pipe open
-                # never delivers EOF, so proc.poll() would never be
-                # checked. The pump thread owns the blocking read; this
-                # thread polls proc.poll() and stops waiting once the
-                # child is gone (plus a grace period for stragglers).
-                _EOF = object()
-                _out_q = queue.Queue()
-
-                def _pump():
-                    try:
-                        for _ln in proc.stdout:
-                            _out_q.put(_ln)
-                    except Exception:
-                        pass
-                    finally:
-                        _out_q.put(_EOF)
-
-                _pt = threading.Thread(target=_pump, daemon=True)
-                _pt.start()
-                _PIPE_EOF_GRACE = 30.0
-                _eof_deadline = None
-                while True:
-                    try:
-                        _item = _out_q.get(timeout=1.0)
-                    except queue.Empty:
-                        if proc.poll() is not None:
-                            if _eof_deadline is None:
-                                _eof_deadline = (time.monotonic()
-                                                 + _PIPE_EOF_GRACE)
-                                log("%s: process exited; waiting for "
-                                    "pipe EOF ..." % label)
-                            if time.monotonic() >= _eof_deadline:
-                                log("WARNING: %s: pipe still open %ds "
-                                    "after process exit (a descendant "
-                                    "may hold it); proceeding with "
-                                    "output collected so far"
-                                    % (label, _PIPE_EOF_GRACE))
-                                break
-                        continue
-                    if _item is _EOF:
-                        break
-                    logfh.write(_item)
-                    parse_line(cmd_idx, _item)
-                # Drain anything the pump thread queued but we did not
-                # consume yet (non-blocking).
-                while True:
-                    try:
-                        _item = _out_q.get_nowait()
-                    except queue.Empty:
-                        break
-                    if _item is _EOF:
-                        break
-                    logfh.write(_item)
-                    parse_line(cmd_idx, _item)
+        for cmd_idx, (cmd, desc) in enumerate(cmds):
+            step0 = time.time()
+            if not quiet:
+                log("%s: %s ..." % (label, desc))
+            else:
+                tracker.update(key, None, desc)
+            # The child writes straight to the log file. No pipe, so no
+            # pipe-EOF deadlock is possible, ever.
+            with open(log_path, "w", encoding="utf-8",
+                       errors="replace") as logfh:
+                logfh.write("### %s\n### cmd: %s\n"
+                            % (desc, " ".join(cmd)))
                 logfh.flush()
                 try:
-                    proc.stdout.close()
-                except Exception:
-                    pass
-                # Populate returncode: the read loop above can exit via
-                # pipe EOF without having polled the child yet.
-                if proc.poll() is None:
-                    # Pipe hit EOF but the child is (briefly) still
-                    # alive; wait for its exit status.
-                    try:
-                        proc.wait(timeout=60)
-                    except Exception:
-                        pass
-                _rc = proc.returncode
-                if _rc != 0:
+                    proc = subprocess.Popen(
+                        cmd, cwd=sandbox,
+                        stdout=logfh, stderr=subprocess.STDOUT)
+                except OSError as e:
                     if tracker:
                         tracker.finish(key, False)
-                    log("%s: FAILED at '%s' (rc=%s); sandbox kept: %s" %
-                        (label, desc, _rc, sandbox))
+                    log("%s: could not launch process: %s" % (label, e))
                     return False, time.time() - t0
-                if not quiet:
-                    log("%s: %s done (%s)" %
-                        (label, desc, fmt_min(time.time() - step0)))
+            # Parent's handle is closed; the child holds its own duplicate.
+            # Poll the file for progress and the process for exit.
+            rc, killed, kill_why = _poll_process(
+                label, key, cmd_idx, proc, log_path, parse_line)
+            if killed or rc != 0:
+                if tracker:
+                    tracker.finish(key, False)
+                log("%s: FAILED at '%s' (rc=%s%s); sandbox kept: %s"
+                    % (label, desc, rc,
+                       "; %s" % kill_why if killed else "", sandbox))
+                return False, time.time() - t0
+            if not quiet:
+                log("%s: %s done (%s)"
+                    % (label, desc, fmt_min(time.time() - step0)))
         # All commands succeeded; make sure the bar reaches 100%.
         if tracker:
             tracker.finish(key, True)
@@ -773,7 +827,6 @@ def _run_commands(label, sandbox, cmds, tracker, key, parse_line):
     if not quiet:
         log("%s: finished (%s)" % (label, fmt_min(dt)))
     return True, dt
-
 
 def run_test(test, sandbox, tracker=None, seed=42, test1_mode="single"):
     """Run one test's command sequence inside its sandbox. Returns

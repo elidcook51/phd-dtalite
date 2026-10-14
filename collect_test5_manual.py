@@ -80,7 +80,8 @@ def main():
     # Run aggregation
     print("\nRunning mpr_aggregate.py...")
     cmd = [sys.executable, "mpr_aggregate.py",
-           "--input-dir", os.path.join(results_root, "test5"),
+           "--input-dir", os.path.join(results_root, "test5", "proposed_sweep"),
+           "--ue-dir", os.path.join(results_root, "test5", "ue_sweep"),
            "--output-dir", os.path.join(results_root, "test5"),
            "--seed", str(args.seed)]
     # mpr_aggregate writes to results/test5/ by default; check its --output-dir

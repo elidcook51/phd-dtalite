@@ -24,6 +24,7 @@ from ``parallel_msa.py``.
 
 import concurrent.futures
 import contextlib
+import multiprocessing
 import os
 import shutil
 import warnings
@@ -55,6 +56,13 @@ SHARED_RESULT_NAMES = [
     "UOinfor_LinkMOE.csv",
     "UOinfor_LinkTDMOE.csv",
 ]
+
+# A single bigloop that produces no result within this long is treated
+# as hung: fail with a clear error instead of blocking forever (which
+# used to hang runner_parallel.py -- and therefore wholerunner --
+# indefinitely at 100%%).
+BIGLOOP_TIMEOUT_S = 3600
+
 
 
 def _result_names(bigloop):
@@ -435,26 +443,57 @@ def run_parallel_msa_ue(schedule, ue_routes_path, max_workers=None,
     failures = []
     futures = {}
     try:
-        with concurrent.futures.ProcessPoolExecutor(
+        executor = concurrent.futures.ProcessPoolExecutor(
             max_workers=max_workers
-        ) as executor:
+        )
+        try:
             futures = {
                 executor.submit(_msa_ue_worker, task): task for task in tasks
             }
-            for future in concurrent.futures.as_completed(futures):
-                task = futures[future]
-                try:
-                    results.append(future.result())
-                except Exception as exc:
-                    # Resilient: record the failure and continue with
-                    # remaining bigloops instead of aborting the sweep.
-                    # The failed sandbox is kept for inspection (see
-                    # finally block below).
+            pending = set(futures)
+            while pending:
+                # wait() (not as_completed) so a hung worker cannot block
+                # the loop forever: after BIGLOOP_TIMEOUT_S with futures
+                # still pending, record them as failures and move on.
+                done, pending = concurrent.futures.wait(
+                    pending, timeout=BIGLOOP_TIMEOUT_S,
+                    return_when=concurrent.futures.ALL_COMPLETED)
+                for future in done:
+                    task = futures[future]
+                    try:
+                        results.append(future.result())
+                    except Exception as exc:
+                        # Resilient: record the failure and continue with
+                        # remaining bigloops instead of aborting the sweep.
+                        # The failed sandbox is kept for inspection (see
+                        # finally block below).
+                        failures.append(task['bigloop'])
+                        warnings.warn(
+                            f"UE-guidance MSA run failed for bigloop={task['bigloop']} "
+                            f"(sandbox Run{task['run_id']} kept for inspection): {exc}"
+                        )
+                for future in pending:
+                    # Timed-out workers: record as failures; the inner
+                    # finally shuts the executor down without waiting.
+                    task = futures[future]
                     failures.append(task['bigloop'])
                     warnings.warn(
-                        f"UE-guidance MSA run failed for bigloop={task['bigloop']} "
-                        f"(sandbox Run{task['run_id']} kept for inspection): {exc}"
+                        f"UE-guidance MSA run timed out after {BIGLOOP_TIMEOUT_S}s "
+                        f"for bigloop={task['bigloop']} "
+                        f"(sandbox Run{task['run_id']} kept for inspection)."
                     )
+                pending = set()
+        finally:
+            # Never block forever on stuck workers: cancel what has not
+            # started and do NOT wait for running workers. Then terminate
+            # any workers still alive (e.g. hung in a task) so they do
+            # not linger as orphans after this process exits.
+            executor.shutdown(wait=False, cancel_futures=True)
+            for _child in multiprocessing.active_children():
+                try:
+                    _child.terminate()
+                except Exception:
+                    pass
 
         # Mimic serial semantics: shared result files come from the last
         # (highest bigloop) iteration -- use the highest *successful* one.
@@ -477,11 +516,15 @@ def run_parallel_msa_ue(schedule, ue_routes_path, max_workers=None,
             )
         return results
     finally:
-        # Leaving the executor block waits for pending workers
-        # (shutdown(wait=True)), so every future is done here; classify each
+        # The inner finally already shut the executor down without waiting,
+        # so some futures may be unfinished/cancelled here; classify each
         # run by its actual outcome rather than by consumed results.
         for fut, task in futures.items():
-            succeeded = fut.done() and fut.exception() is None
+            try:
+                succeeded = (fut.done() and not fut.cancelled()
+                             and fut.exception() is None)
+            except Exception:
+                succeeded = False
             run_dir = sandbox_path(task["run_id"], repo_root)
             if os.path.exists(run_dir):
                 if succeeded or not keep_on_failure:
