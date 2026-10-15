@@ -1321,6 +1321,18 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
 
+    # Couple --network to data/results dirs: --network baltimore implies
+    # --data-dir baltimore_files and --results-dir results_baltimore,
+    # unless the user explicitly overrode them.
+    if args.network == "baltimore":
+        import sys as _sys
+        _argv = _sys.argv[1:] if argv is None else argv
+        _argv_str = " ".join(_argv) if _argv else ""
+        if "--data-dir" not in _argv_str and args.data_dir == "DTALite_Files":
+            args.data_dir = "baltimore_files"
+        if "--results-dir" not in _argv_str and args.results_dir == "results":
+            args.results_dir = "results_baltimore"
+
     if args.skip_test1:
         warnings.warn("--skip-test1 is deprecated; use --tests 2,3,4",
                       DeprecationWarning, stacklevel=2)
