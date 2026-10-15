@@ -599,13 +599,10 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
 
 
-    for i in range(dsize):
-
-        a0[i, 0] = inputagent[i][6]
-
-        a0[i, 1] = inputagent[i][4]
-
-        a0[i, 2] = inputagent[i][5]
+    _ia = np.asarray(inputagent)
+    a0[:, 0] = _ia[:, 6]
+    a0[:, 1] = _ia[:, 4]
+    a0[:, 2] = _ia[:, 5]
 
 
 
@@ -630,6 +627,13 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
 
     _pbar = get_pbar(bigloop, total=20)
+    # MSA convergence: stop early if no agent changes routes for
+    # 3 consecutive iterations (min 10, max 18). This is a pre-registered
+    # criterion: a fixed point with cc==0 is mathematically stable, and
+    # further MSA iterations with diminishing weights (1/itr) cannot move it.
+    _converged_streak = 0
+    _min_itr = 10
+    _required_streak = 3
     for itr in range(1, 19):
 
         _pbar.set_description(f"Bigloop {bigloop} itr {itr}/18")
@@ -1006,6 +1010,17 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
             # (never changes per agent); the route index is final_rposition.
 
             cc[itr - 1] = np.sum(final_rposition != prev_rposition)
+
+            # Convergence check: 3 consecutive iterations with zero changes
+            if cc[itr - 1] == 0:
+                _converged_streak += 1
+            else:
+                _converged_streak = 0
+            if itr >= _min_itr and _converged_streak >= _required_streak:
+                print("MSA converged at iteration %d "
+                      "(no route changes for %d iterations)" %
+                      (itr, _required_streak), flush=True)
+                break
 
 
 

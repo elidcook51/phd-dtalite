@@ -191,7 +191,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
     else:
 
-        T = pd.read_csv('DTALite_Files/output_agent.csv')
+        T = pd.read_csv('DTALite_Files/output_agent.csv', usecols=[0, 9, 12, 29])
 
 
 
@@ -1164,7 +1164,6 @@ def fixedcomassignment(
 
     gas = 3.0
 
-    links = pd.read_csv('DTALite_Files/input_link.csv')
 
     
 
@@ -1905,7 +1904,6 @@ def comassignment(
 
     gas = 3.0
 
-    links = pd.read_csv('DTALite_Files/input_link.csv')
 
     
 

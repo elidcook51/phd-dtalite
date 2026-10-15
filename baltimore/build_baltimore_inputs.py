@@ -226,7 +226,23 @@ def main():
     # The Sioux Falls version references wrong node IDs; DTALite validates
     # these, so we generate from the Baltimore node file instead.
     log("  building input_activity_location.csv ...")
-    zone_node = {}
+    # DTALite requires activity nodes to have link connectivity:
+    # destination nodes need incoming links, origin nodes need outgoing.
+    # Build sets from input_link.csv, then pick the first zone node
+    # that has BOTH (or set external_od_flag if only one direction).
+    _has_in = set()
+    _has_out = set()
+    with open(os.path.join(src, "input_link.csv"), newline="",
+              encoding="utf-8-sig") as _fh:
+        for _row in csv.DictReader(_fh):
+            try:
+                _u = int(float(_row["from_node_id"]))
+                _v = int(float(_row["to_node_id"]))
+            except (ValueError, KeyError):
+                continue
+            _has_out.add(_u)
+            _has_in.add(_v)
+    zone_node = {}  # z -> (node_id, flag)
     with open(os.path.join(src, "input_node.csv"), newline="",
               encoding="utf-8-sig") as fh:
         for row in csv.DictReader(fh):
@@ -235,14 +251,26 @@ def main():
                 n = int(float(row["node_id"]))
             except (ValueError, KeyError):
                 continue
-            if z > 0 and z not in zone_node:
-                zone_node[z] = n
+            if z <= 0 or z in zone_node:
+                continue
+            _in_ok = n in _has_in
+            _out_ok = n in _has_out
+            if _in_ok and _out_ok:
+                zone_node[z] = (n, "")
+            elif _in_ok:
+                zone_node[z] = (n, "1")   # destination only
+            elif _out_ok:
+                zone_node[z] = (n, "-1")  # origin only
+            # else: skip nodes with no links at all
+    # Fallback: if a zone has no connected node, use first node anyway
+    # (DTALite will warn but may still run)
     with open(os.path.join(out, "input_activity_location.csv"), "w",
               newline="", encoding="utf-8") as fh:
         w = csv.writer(fh)
         w.writerow(["zone_id", "node_id", "external_OD_flag"])
         for z in sorted(zone_node):
-            w.writerow([z, zone_node[z], ""])
+            n, flag = zone_node[z]
+            w.writerow([z, n, flag])
     log("  activity locations: %d" % len(zone_node))
 
     # ---- 3. choice sets (.mat v7.3 -> pickle) ---------------------------
