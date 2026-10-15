@@ -388,12 +388,13 @@ def runner_schedule(n=11):
     return schedule
 
 
-def _start_worker_watchdog():
-    """Arm a daemon thread that kills this worker if it runs too long.
+def _worker_initializer():
+    """Executor initializer: arm watchdog once per worker process.
 
-    See parallel_msa._start_worker_watchdog: os._exit(2) after
-    WORKER_WATCHDOG_S seconds. Converts any worker-side hang into a loud
-    failure (BrokenProcessPoolError) instead of an infinite stall.
+    Called once when each pool worker process starts (via the executor's
+    `initializer` parameter), NOT per-task. The watchdog measures worker
+    LIFETIME. Per-task stuckness is handled by the parent's per-bigloop
+    timeout.
     """
     def _watchdog():
         time.sleep(WORKER_WATCHDOG_S)
@@ -428,8 +429,21 @@ def _msa_ue_worker(task):
     Top-level worker entry point (must stay top-level for pickling with the
     *spawn* start method on Windows).  ``task`` is a plain dict of keyword
     arguments for ``msa_parallel_ue``.
+
+    Writes a start-timestamp file so the parent can measure per-task
+    timeout from actual execution start (not submission time).
     """
-    _start_worker_watchdog()
+    try:
+        import os
+        ts_dir = task.get("_timestamp_dir")
+        if ts_dir:
+            bl = task.get("bigloop", "?")
+            ts_file = os.path.join(ts_dir, f"started_{bl}.ts")
+            with open(ts_file, "w") as tf:
+                tf.write(str(time.monotonic()))
+    except Exception:
+        pass
+    task = {k: v for k, v in task.items() if not k.startswith("_")}
     return msa_parallel_ue(**task)
 
 
@@ -482,8 +496,14 @@ def _run_batch(task_list, max_workers, repo_root, msa_fn, seed,
     futures = {}
     submit_time = time.monotonic()
     completed_durations = []
+    # Timestamp dir for per-task start times (Fix 6)
+    import tempfile
+    ts_dir = tempfile.mkdtemp(prefix="bigloop_ts_")
+    for task in task_list:
+        task["_timestamp_dir"] = ts_dir
     executor = concurrent.futures.ProcessPoolExecutor(
-        max_workers=max_workers)
+        max_workers=max_workers,
+        initializer=_worker_initializer)
     try:
         futures = {executor.submit(worker_fn, task): task
                    for task in task_list}
@@ -510,7 +530,17 @@ def _run_batch(task_list, max_workers, repo_root, msa_fn, seed,
             pending = still_pending - processed
 
             if pending:
-                elapsed = now - submit_time
+                # Per-task timeout (Fix 6): measure from actual task start
+                def _task_elapsed(task):
+                    bl = task["bigloop"]
+                    ts_file = os.path.join(ts_dir, f"started_{bl}.ts")
+                    try:
+                        with open(ts_file, "r") as tf:
+                            start = float(tf.read().strip())
+                        return now - start
+                    except Exception:
+                        return 0.0
+                elapsed = now - submit_time  # batch-level backstop
                 if len(completed_durations) >= 3:
                     median = sorted(completed_durations)[
                         len(completed_durations) // 2]

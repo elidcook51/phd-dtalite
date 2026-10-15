@@ -696,15 +696,33 @@ def _kill_proc_tree(proc):
         pass
 
 
-def _poll_process(label, key, cmd_idx, proc, log_path, parse_line):
+def _poll_process(label, key, cmd_idx, proc, log_path, parse_line,
+                tracker=None):
     """Poll log_path for new output lines and proc for exit.
 
     Returns (returncode, killed, kill_reason). `killed` is True when the
     process had to be killed (stall or absolute timeout); otherwise the
     process exited on its own.
+
+    The stall detector is progress-aware: last_progress is reset only when
+    the tracker's fraction for `key` actually advances. A chatty-but-stuck
+    child that emits bytes without progress will still be killed.
     """
     pos = 0  # header lines ("### ...") match no progress regex; harmless
     last_out = time.monotonic()
+    last_progress = time.monotonic()
+    # Track the fraction to detect actual progress (not just bytes)
+    def _get_frac():
+        if tracker is None:
+            return None
+        try:
+            snap = tracker.snapshot()
+            if key in snap:
+                return snap[key][0]
+        except Exception:
+            pass
+        return None
+    last_frac = _get_frac()
     abs_deadline = last_out + _RUN_ABS_S
     killed = False
     kill_why = ""
@@ -718,12 +736,22 @@ def _poll_process(label, key, cmd_idx, proc, log_path, parse_line):
                 chunk = ""
             if chunk:
                 pos = rf.tell()
-                last_out = time.monotonic()
                 # tqdm writes \r-separated bar updates with no \n; split
                 # on both so progress markers are seen promptly.
                 for piece in re.split(r"[\r\n]+", chunk):
                     if piece.strip():
                         parse_line(cmd_idx, piece)
+                # Progress-aware: only reset timers if fraction advanced.
+                # Bytes without progress do not reset the stall detector.
+                new_frac = _get_frac()
+                if new_frac is not None and last_frac is not None:
+                    if new_frac > last_frac:
+                        last_progress = time.monotonic()
+                        last_frac = new_frac
+                # If no tracker, fall back to byte-based (original behavior)
+                elif new_frac is None and last_frac is None:
+                    last_out = time.monotonic()
+                    last_progress = time.monotonic()
             rc = proc.poll()
             if rc is not None:
                 # Final drain: the child may have written between our
@@ -739,8 +767,8 @@ def _poll_process(label, key, cmd_idx, proc, log_path, parse_line):
                             parse_line(cmd_idx, piece)
                 break
             now = time.monotonic()
-            if now - last_out > _RUN_STALL_S:
-                kill_why = ("no output for %s; killed stuck process"
+            if now - last_progress > _RUN_STALL_S:
+                kill_why = ("no progress for %s; killed stuck process"
                             % fmt_min(_RUN_STALL_S))
                 log("ERROR: %s: %s" % (label, kill_why))
                 _kill_proc_tree(proc)
@@ -804,7 +832,8 @@ def _run_commands(label, sandbox, cmds, tracker, key, parse_line):
             # Parent's handle is closed; the child holds its own duplicate.
             # Poll the file for progress and the process for exit.
             rc, killed, kill_why = _poll_process(
-                label, key, cmd_idx, proc, log_path, parse_line)
+                label, key, cmd_idx, proc, log_path, parse_line,
+                tracker=tracker)
             if killed or rc != 0:
                 if tracker:
                     tracker.finish(key, False)
@@ -978,7 +1007,13 @@ def run_aggregation(results_root, seed, tracker=None):
         tracker.update("5A", None, "aggregating...")
     log("Test 5: aggregating MPR sweep (mpr_aggregate.py) ...")
     t0 = time.time()
-    rc = subprocess.run(cmd).returncode
+    try:
+        rc = subprocess.run(cmd, timeout=4*3600).returncode
+    except subprocess.TimeoutExpired:
+        log("ERROR: mpr_aggregate.py timed out after 4h; marking aggregation failed")
+        if tracker:
+            tracker.finish("5A", False)
+        return False, time.time() - t0
     dt = time.time() - t0
     ok = rc == 0
     if tracker:
@@ -1163,7 +1198,13 @@ def run_test6(results_root, tracker=None):
     t0 = time.time()
     # Fast and deterministic; no progress markers to parse, so inherit
     # the console instead of capturing.
-    rc = subprocess.run(cmd).returncode
+    try:
+        rc = subprocess.run(cmd, timeout=4*3600).returncode
+    except subprocess.TimeoutExpired:
+        log("ERROR: volume_estimation.py (Test 6) timed out after 4h")
+        if tracker:
+            tracker.finish(6, False)
+        return False, time.time() - t0
     dt = time.time() - t0
     ok = rc == 0
     if tracker:

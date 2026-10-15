@@ -54,7 +54,7 @@ import subprocess
 
 from assignment import assignment, comassignment, sanitize_dtalite_outputs
 try:
-    from progress import get_pbar, dtalite_kwargs
+    from progress import get_pbar, dtalite_kwargs, kill_dtalite_leftovers
     _HAS_PROGRESS = True
 except ImportError:
     _HAS_PROGRESS = False
@@ -1051,13 +1051,18 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
 
 
-        subprocess.run(
+        try:
+            subprocess.run(
 
-            DTALITE_CMD, cwd = 'DTALite_Files', check = True,
+                DTALITE_CMD, cwd = 'DTALite_Files', check = True,
 
-            **dtalite_kwargs()
+                **dtalite_kwargs()
 
-        )
+            )
+        except subprocess.TimeoutExpired:
+            kill_dtalite_leftovers()
+            raise RuntimeError(
+                f"DTALite.exe timed out after 900s (bigloop={bigloop}, itr={itr})")
         _pbar.update(1)
 
         sanitize_dtalite_outputs()
@@ -1248,13 +1253,18 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
 
 
-    subprocess.run(
+    try:
+        subprocess.run(
 
-        DTALITE_CMD, cwd = 'DTALite_Files', check = True,
+            DTALITE_CMD, cwd = 'DTALite_Files', check = True,
 
-            **dtalite_kwargs()
+                **dtalite_kwargs()
 
-    )
+        )
+    except subprocess.TimeoutExpired:
+        kill_dtalite_leftovers()
+        raise RuntimeError(
+            f"DTALite.exe timed out after 900s (bigloop={bigloop}, phase=predict)")
 
     sanitize_dtalite_outputs()
 
@@ -1368,13 +1378,18 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
 
 
-    subprocess.run(
+    try:
+        subprocess.run(
 
-        DTALITE_CMD, cwd = 'DTALite_Files', check = True,
+            DTALITE_CMD, cwd = 'DTALite_Files', check = True,
 
-            **dtalite_kwargs()
+                **dtalite_kwargs()
 
-    )
+        )
+    except subprocess.TimeoutExpired:
+        kill_dtalite_leftovers()
+        raise RuntimeError(
+            f"DTALite.exe timed out after 900s (bigloop={bigloop}, phase=actual)")
 
     sanitize_dtalite_outputs()
 

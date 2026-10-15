@@ -69,8 +69,35 @@ def get_pbar(bigloop, total=20, position=None):
 
 
 def dtalite_kwargs():
-    """kwargs for subprocess.run to silence DTALite (unless overridden)."""
+    """kwargs for subprocess.run to silence DTALite (unless overridden).
+
+    Includes stdin=DEVNULL (prevents hangs on stdin reads) and timeout=900
+    (prevents infinite hangs if DTALite stalls). Callers should wrap in
+    try/except subprocess.TimeoutExpired for clear error messages.
+    """
     import subprocess
     if os.environ.get("DTALITE_VERBOSE") == "1":
-        return {}
-    return {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        return {"stdin": subprocess.DEVNULL, "timeout": 900}
+    return {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+            "stdin": subprocess.DEVNULL, "timeout": 900}
+
+
+def kill_dtalite_leftovers():
+    """Force-kill any lingering DTALite.exe processes.
+
+    Called after a DTALite timeout to prevent orphaned processes from
+    holding files or CPU. Uses taskkill on Windows, pkill on POSIX.
+    """
+    import subprocess
+    import sys
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/IM", "DTALite.exe", "/T"],
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=30)
+        else:
+            subprocess.run(["pkill", "-9", "-f", "DTALite"],
+                           stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=30)
+    except Exception:
+        pass

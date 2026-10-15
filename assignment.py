@@ -6,7 +6,7 @@ import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning,
                          message="divide by zero*")
 try:
-    from progress import dtalite_kwargs as _dtalite_kw
+    from progress import dtalite_kwargs as _dtalite_kw, kill_dtalite_leftovers
 except ImportError:
     def _dtalite_kw():
         return {}
@@ -35,34 +35,6 @@ import time
 
 
 
-# ---------------------------------------------------------------------------
-# DTALite executable
-# ---------------------------------------------------------------------------
-# DTALite.exe is a Windows binary. On Linux (e.g. UVA Rivanna) it is launched
-# under Wine instead: ``wine DTALite.exe`` with cwd='DTALite_Files'.
-# Requirements on Linux: the ``wine`` command on PATH, and ``mfc140.dll``
-# sitting next to DTALite.exe inside DTALite_Files/.
-# Note the bare exe name on Linux: with cwd='DTALite_Files' the child process
-# resolves it *after* chdir, whereas Windows resolves the 'DTALite_Files/...'
-# path against the parent directory.
-import platform as _platform
-
-if _platform.system() == 'Windows':
-    DTALITE_CMD = ['DTALite_Files/DTALite.exe']
-else:
-    # Linux (e.g. UVA Rivanna): prefer the NATIVE DTALite build -- drop the
-    # `DTALite` binary into DTALite_Files/ next to the inputs (see README).
-    # Falls back to the Windows exe under Wine (needs mfc140.dll beside it).
-    # NOTE: './DTALite' carries no directory prefix because, with
-    # cwd='DTALite_Files', the child resolves it *after* chdir. This also
-    # holds inside RunX/ sandboxes: parallel_msa.py copytrees the whole
-    # DTALite_Files/ folder (binary included) and chdirs into RunX/.
-    if os.path.isfile(os.path.join('DTALite_Files', 'DTALite')):
-        DTALITE_CMD = ['./DTALite']
-    else:
-        DTALITE_CMD = ['wine', 'DTALite.exe']
-
-
 def sanitize_dtalite_csv(path):
 
     """
@@ -87,7 +59,7 @@ def sanitize_dtalite_csv(path):
 
     """
 
-    with open(path, newline="", encoding="latin-1") as f:
+    with open(path, newline="") as f:
 
         rows = list(csv.reader(f))
 
@@ -113,7 +85,7 @@ def sanitize_dtalite_csv(path):
 
     if changed:
 
-        with open(path, "w", newline="", encoding="latin-1") as f:
+        with open(path, "w", newline="") as f:
 
             csv.writer(f).writerows(fixed)
 
@@ -125,9 +97,7 @@ def sanitize_dtalite_outputs():
 
     """
 
-    Normalize every ``DTALite_Files/output_*.csv`` -- plus ``Each iteration.csv``,
-
-    which this module also reads -- after a DTALite.exe run
+    Normalize every ``DTALite_Files/output_*.csv`` after a DTALite.exe run
 
     (see ``sanitize_dtalite_csv``).  Call this after each
 
@@ -143,7 +113,7 @@ def sanitize_dtalite_outputs():
 
     for name in sorted(os.listdir(d)):
 
-        if name == "Each iteration.csv" or (name.startswith("output_") and name.endswith(".csv")):
+        if name.startswith("output_") and name.endswith(".csv"):
 
             sanitize_dtalite_csv(os.path.join(d, name))
 
@@ -2618,33 +2588,27 @@ def comassignment(
 
 
 
+        j = 4
+
+
+
         ypath = []
 
 
 
-        n_od, n_routes = choiceset.shape
-
         for j in range(x + len(p_agent)):
 
-            od_index = int(final_choice[j])
+            ypath.append(
 
-            route_index = int(final_rposition[j])
+                choiceset[
 
-            if not (0 <= od_index < n_od and 0 <= route_index < n_routes):
+                    int(final_choice[j]),
 
-                raise IndexError(
+                    int(final_rposition[j])
 
-                    "Invalid choiceset indices for agent "
+                ]
 
-                    f"{j}: od_index={od_index}, "
-
-                    f"route_index={route_index}, "
-
-                    f"choiceset shape={choiceset.shape}"
-
-                )
-
-            ypath.append(choiceset[od_index, route_index])
+            )
 
 
 
@@ -2656,25 +2620,17 @@ def comassignment(
 
             if isinstance(path, list):
 
-                raise RuntimeError(
+                path = path[0]
 
-                    "choice-set entry for an agent is a list, not a path string; "
-
-                    "the choiceset builder should unwrap single-element lists"
-
-                )
+                raise SystemExit
 
 
 
             elif isinstance(path, np.ndarray):
 
-                raise RuntimeError(
+                path = path.flat[0]
 
-                    "choice-set entry for an agent is an ndarray, not a path string; "
-
-                    "the choiceset builder should scalarize single-element arrays"
-
-                )
+                raise SystemExit
 
 
 
@@ -2738,21 +2694,18 @@ def comassignment(
 
 
 
-        # Debug step on a DTALite failure: rerun with DTALITE_VERBOSE=1 in the
+        try:
+            subprocess.run(
 
-        # environment so the simulator's stdout/stderr is kept (see _dtalite_kw
+                [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
 
-        # in progress.py) instead of being discarded -- the failing inputs are
+                **_dtalite_kw()
 
-        # still on disk in DTALite_Files/ for inspection.
-
-        subprocess.run(
-
-            DTALITE_CMD, cwd = 'DTALite_Files', check = True, timeout = 3600,
-
-            **_dtalite_kw()
-
-        )
+            )
+        except subprocess.TimeoutExpired:
+            kill_dtalite_leftovers()
+            raise RuntimeError(
+                "DTALite.exe timed out after 900s in comassignment")
 
         sanitize_dtalite_outputs()
 
