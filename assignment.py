@@ -259,21 +259,15 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-    # 1-based indices so that a lookup miss (sparse default 0)
-    # is distinguishable from a real link.
-    data = np.arange(1, len(link_lengths) + 1)
-
-    # Baltimore has parallel links (duplicate from/to node pairs).
-    # csr_matrix SUMS duplicate entries, corrupting the 1-based index
-    # (the sum can exceed n_links -> IndexError, or silently return the
-    # wrong link's length). Deduplicate, keeping the first occurrence.
-    _pairs = np.column_stack([np.asarray(row_idx), np.asarray(col_idx)])
-    _, _uniq = np.unique(_pairs, axis=0, return_index=True)
-    _uniq = np.sort(_uniq)
-    link_lookup = csr_matrix(
-        (data[_uniq], (np.asarray(row_idx)[_uniq], np.asarray(col_idx)[_uniq])),
-        shape=(max_node + 1, max_node + 1)
-    )
+    # Dict: (from_node, to_node) -> 1-based row index into link_lengths.
+    # O(1) per lookup vs csr_matrix scalar indexing overhead.
+    # Keeps first occurrence for duplicate (from,to) pairs (Baltimore
+    # parallel links); 0/missing = no link.
+    link_lookup = {}
+    for _i, (_u, _v) in enumerate(zip(row_idx, col_idx)):
+        _key = (int(_u), int(_v))
+        if _key not in link_lookup:
+            link_lookup[_key] = _i + 1
 
 
 
@@ -344,7 +338,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
                 ):
 
-                    link_idx = int(link_lookup[n1, n2])
+                    link_idx = link_lookup.get((n1, n2), 0)
 
 
 
@@ -590,17 +584,16 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
     nchoice = np.zeros(dsize, dtype = int)
 
-
+    # OD -> routelocation row indices dict. O(1) per agent vs O(n_od)
+    # np.where scan. Critical for large agent counts (276k).
+    _od_to_rows = {}
+    for _r in range(routelocation.shape[0]):
+        _key = (routelocation[_r, 0], routelocation[_r, 1])
+        _od_to_rows.setdefault(_key, []).append(_r)
 
     for i in range(dsize):
 
-        matches = np.where(
-
-            (routelocation[:,0] == agentOD[i,0]) & 
-
-            (routelocation[:,1] == agentOD[i,1])
-
-        )[0]
+        matches = _od_to_rows.get((agentOD[i,0], agentOD[i,1]), [])
 
 
 
@@ -1198,21 +1191,15 @@ def fixedcomassignment(
 
     col_idx = length_data[:,1].astype(int)
 
-    # 1-based indices so that a lookup miss (sparse default 0)
-    # is distinguishable from a real link.
-    data = np.arange(1, len(length_data) + 1)
-
-    # Baltimore has parallel links (duplicate from/to node pairs).
-    # csr_matrix SUMS duplicate entries, corrupting the 1-based index
-    # (the sum can exceed n_links -> IndexError, or silently return the
-    # wrong link's length). Deduplicate, keeping the first occurrence.
-    _pairs = np.column_stack([np.asarray(row_idx), np.asarray(col_idx)])
-    _, _uniq = np.unique(_pairs, axis=0, return_index=True)
-    _uniq = np.sort(_uniq)
-    link_lookup = csr_matrix(
-        (data[_uniq], (np.asarray(row_idx)[_uniq], np.asarray(col_idx)[_uniq])),
-        shape=(max_node + 1, max_node + 1)
-    )
+    # Dict: (from_node, to_node) -> 1-based row index into length_data.
+    # O(1) per lookup vs csr_matrix scalar indexing overhead.
+    # Keeps first occurrence for duplicate (from,to) pairs (Baltimore
+    # parallel links); 0/missing = no link.
+    link_lookup = {}
+    for _i, (_u, _v) in enumerate(zip(row_idx, col_idx)):
+        _key = (int(_u), int(_v))
+        if _key not in link_lookup:
+            link_lookup[_key] = _i + 1
 
 
 
@@ -1268,7 +1255,7 @@ def fixedcomassignment(
 
                 if (0 < n1 <= max_node and 0 < n2 <= max_node):
 
-                    link_idx = int(link_lookup[n1, n2])
+                    link_idx = link_lookup.get((n1, n2), 0)
 
 
 

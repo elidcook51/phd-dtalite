@@ -139,7 +139,11 @@ def load_network_baltimore(path, log):
             try:
                 u = int(float(row["from_node_id"]))
                 v = int(float(row["to_node_id"]))
-                fft = float(row["free_flow_time"])
+                fft_raw = row.get("free_flow_time")
+                if fft_raw:
+                    fft = float(fft_raw)
+                else:
+                    fft = float(row["length"]) / float(row["free_speed"]) * 60.0
             except (ValueError, TypeError, KeyError):
                 n_skipped += 1
                 continue
