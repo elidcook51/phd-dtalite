@@ -608,7 +608,7 @@ def test1_commands(sandbox, seed, test1_mode="single", network="siouxfalls"):
     return [(cmd, desc)]
 
 
-def test24_commands(test, sandbox, seed, network="siouxfalls"):
+def test24_commands(test, sandbox, seed, network="siouxfalls", gap_threshold=0.0001):
     """Guidance scenario followed by the preference-reaction step."""
     staging = os.path.join(sandbox, "staging")
     os.makedirs(staging, exist_ok=True)
@@ -625,7 +625,8 @@ def test24_commands(test, sandbox, seed, network="siouxfalls"):
     else:  # test 4
         scenario = [PY, os.path.join(sandbox, "scenarios_ue.py"),
                     "--data-dir", data, "--result-dir", staging,
-                    "--seed", str(seed), "--network", network]
+                    "--seed", str(seed), "--network", network,
+                    "--gap-threshold", str(gap_threshold)]
         scenario_desc = "UE baseline (MSA guidance)"
         guidance_csv = os.path.join(staging, "ue_routes.csv")
 
@@ -868,7 +869,7 @@ def run_test(test, sandbox, tracker=None, seed=42, test1_mode="single",
     if test == 1:
         cmds = test1_commands(sandbox, seed, test1_mode, network)
     else:
-        cmds = test24_commands(test, sandbox, seed, network)
+        cmds = test24_commands(test, sandbox, seed, network, args.gap_threshold)
     return _run_commands(cfg["label"], sandbox, cmds, tracker, test,
                          lambda i, line: parse_progress_line(test, i, line, tracker))
 
@@ -1288,6 +1289,9 @@ def parse_args(argv=None):
     ap.add_argument("--data-dir", default="DTALite_Files",
                     help="read-only DTALite_Files source (default: "
                          "DTALite_Files)")
+    ap.add_argument("--gap-threshold", type=float, default=0.0001,
+                    help="UE relative gap convergence threshold (Test 4 only; "
+                         "default: 0.0001)")
     ap.add_argument("--network", default="siouxfalls",
                     choices=["siouxfalls", "baltimore"],
                     help="network: siouxfalls (default) or baltimore "
