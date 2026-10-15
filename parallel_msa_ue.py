@@ -127,7 +127,7 @@ def stage_run_dir(run_id, source_dir=SOURCE_DIR, repo_root=None):
     repo_root = os.path.abspath(repo_root or os.getcwd())
     run_dir = sandbox_path(run_id, repo_root)
     src = os.path.join(repo_root, source_dir)
-    dst = os.path.join(run_dir, source_dir)
+    dst = os.path.join(run_dir, SOURCE_DIR)
 
     if not os.path.isdir(src):
         raise FileNotFoundError(
