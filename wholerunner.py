@@ -866,14 +866,14 @@ def _run_commands(label, sandbox, cmds, tracker, key, parse_line):
     return True, dt
 
 def run_test(test, sandbox, tracker=None, seed=42, test1_mode="single",
-           network="siouxfalls"):
+           network="siouxfalls", gap_threshold=0.0001):
     """Run one test's command sequence inside its sandbox. Returns
     (ok, elapsed)."""
     cfg = TESTS[test]
     if test == 1:
         cmds = test1_commands(sandbox, seed, test1_mode, network)
     else:
-        cmds = test24_commands(test, sandbox, seed, network, args.gap_threshold)
+        cmds = test24_commands(test, sandbox, seed, network, gap_threshold)
     return _run_commands(cfg["label"], sandbox, cmds, tracker, test,
                          lambda i, line: parse_progress_line(test, i, line, tracker))
 
@@ -1673,7 +1673,8 @@ def main(argv=None):
             for t in tests:
                 if t in (1, 2, 3, 4):
                     fut = ex.submit(run_test, t, sandboxes[t], tracker,
-                                    args.seed, args.test1_mode, args.network)
+                                    args.seed, args.test1_mode, args.network,
+                                    args.gap_threshold)
                     futures[fut] = ("test", t)
             if 5 in tests:
                 fut = ex.submit(run_sweep, "P", sandboxes["5P"], tracker,

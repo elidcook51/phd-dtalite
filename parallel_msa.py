@@ -167,10 +167,19 @@ def stage_run_dir(run_id, source_dir=SOURCE_DIR, repo_root=None):
 
     Any stale sandbox left by a crashed run is removed first.  Returns the
     absolute sandbox path.
+
+    Falls back to DTALite_Files/ if the network-specific source dir
+    doesn't exist (e.g. wholerunner stages Baltimore data as
+    DTALite_Files/ in the sandbox).
     """
     repo_root = os.path.abspath(repo_root or os.getcwd())
     run_dir = sandbox_path(run_id, repo_root)
     src = os.path.join(repo_root, source_dir)
+    # Fallback for wholerunner sandboxes: data staged as DTALite_Files/
+    if not os.path.isdir(src) and source_dir != SOURCE_DIR:
+        _fallback = os.path.join(repo_root, SOURCE_DIR)
+        if os.path.isdir(_fallback):
+            src = _fallback
     dst = os.path.join(run_dir, SOURCE_DIR)
 
     if not os.path.isdir(src):
@@ -284,6 +293,11 @@ def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
     run_id = bigloop if run_id is None else run_id
     repo_root = os.path.abspath(repo_root or os.getcwd())
     source_dir = NETWORK_SOURCE_DIRS.get(network, SOURCE_DIR)
+    # Match stage_run_dir fallback: if network dir missing, use DTALite_Files/
+    if not os.path.isdir(os.path.join(repo_root, source_dir)):
+        _fb = os.path.join(repo_root, SOURCE_DIR)
+        if os.path.isdir(_fb):
+            source_dir = SOURCE_DIR
     dest_dir = os.path.join(repo_root, source_dir)
 
     run_dir = stage_run_dir(run_id, source_dir=source_dir, repo_root=repo_root)
@@ -784,10 +798,14 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
     # final on-disk state matches a serial run as closely as possible.
     if all_ok:
         last_ok = max(all_ok.values(), key=lambda r: r["bigloop"])
+        _sdir = NETWORK_SOURCE_DIRS.get(network, SOURCE_DIR)
+        if not os.path.isdir(os.path.join(repo_root, _sdir)):
+            _fb = os.path.join(repo_root, SOURCE_DIR)
+            if os.path.isdir(_fb):
+                _sdir = SOURCE_DIR
         collect_shared_results(
             sandbox_path(last_ok["run_id"], repo_root),
-            dest_dir=os.path.join(
-                repo_root, NETWORK_SOURCE_DIRS.get(network, SOURCE_DIR)),
+            dest_dir=os.path.join(repo_root, _sdir),
         )
 
     # Cleanup: delete sandboxes ONLY on full success. On any failure, keep
