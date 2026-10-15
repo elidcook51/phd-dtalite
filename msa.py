@@ -952,6 +952,11 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
 
             inputagent[j][11] = selected_path
+            # DTALite requires path endpoints to match OD nodes
+            _nd = [x.strip() for x in str(selected_path).split(';') if x.strip()]
+            if len(_nd) >= 2:
+                inputagent[j][4] = _nd[0]
+                inputagent[j][5] = _nd[-1]
 
 
 
