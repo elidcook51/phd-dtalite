@@ -117,6 +117,33 @@ def fail(msg):
 # Input loading
 # ---------------------------------------------------------------------------
 
+def read_network_baltimore(csv_path):
+    """Link table from Baltimore input_link.csv -> {(from, to): (length, freeflow)}.
+
+    freeflow = length / free_speed * 60 minutes (or free_flow_time if present).
+    """
+    import csv as _csv
+    if not os.path.isfile(csv_path):
+        fail("network csv not found: %s" % csv_path)
+    out = {}
+    with open(csv_path, newline="", encoding="utf-8-sig") as fh:
+        for row in _csv.DictReader(fh):
+            try:
+                u = int(float(row["from_node_id"]))
+                v = int(float(row["to_node_id"]))
+                length = float(row["length"])
+                fft_raw = row.get("free_flow_time")
+                if fft_raw:
+                    fft = float(fft_raw)
+                else:
+                    fft = length / float(row["free_speed"]) * 60.0
+            except (ValueError, TypeError, KeyError):
+                continue
+            if (u, v) not in out:
+                out[(u, v)] = (length, fft)
+    return out
+
+
 def read_network(xlsx_path):
     """Link table from sheet 1, B90:E165 -> {(from, to): (length, freeflow)}.
 
@@ -869,7 +896,11 @@ def main(argv=None):
     _nc.configure(args.network)
     xlsx = os.path.join(data_dir, NETWORK_XLSX)
     print("loading network, users, weights ...")
-    link_info = read_network(xlsx)
+    if _nc.is_baltimore():
+        link_info = read_network_baltimore(
+            os.path.join(data_dir, "input_link.csv"))
+    else:
+        link_info = read_network(xlsx)
     prefs = (read_users_csv(data_dir) if _nc.is_baltimore()
              else read_users(xlsx))
     realweights = read_realweights(xlsx)

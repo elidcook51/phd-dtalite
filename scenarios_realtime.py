@@ -176,6 +176,64 @@ def read_ragged_csv(path, required_columns):
 # Inputs
 # ---------------------------------------------------------------------------
 
+def read_free_flow_times_baltimore(csv_path):
+    """Free-flow minutes per directed link from Baltimore input_link.csv.
+
+    Returns {(from_node, to_node): free_flow_minutes}.
+    Uses free_flow_time column if present, else length/free_speed*60.
+    """
+    import csv as _csv
+    if not os.path.isfile(csv_path):
+        raise ScenarioError("network file not found: %s" % csv_path)
+    out = {}
+    with open(csv_path, newline="", encoding="utf-8-sig") as fh:
+        for row in _csv.DictReader(fh):
+            try:
+                u = int(float(row["from_node_id"]))
+                v = int(float(row["to_node_id"]))
+                fft_raw = row.get("free_flow_time")
+                if fft_raw:
+                    fft = float(fft_raw)
+                else:
+                    fft = float(row["length"]) / float(row["free_speed"]) * 60.0
+            except (ValueError, TypeError, KeyError):
+                continue
+            if fft > 0 and (u, v) not in out:
+                out[(u, v)] = fft
+    return out
+
+
+def read_choice_set_baltimore(data_dir):
+    """Choice set as dict OD (oz, dz) -> list of (nodes, links) routes.
+
+    Loads choice_sets.pkl {(oz,dz): [[nodes], ...]} and converts each
+    path to (nodes_tuple, [(n1,n2), ...]) to match read_choice_set format.
+    """
+    import pickle as _pickle
+    pkl_path = os.path.join(data_dir, "choice_sets.pkl")
+    if not os.path.isfile(pkl_path):
+        raise ScenarioError("choice-set file not found: %s" % pkl_path)
+    with open(pkl_path, "rb") as fh:
+        d = _pickle.load(fh)
+    out = {}
+    for (oz, dz), paths in d.items():
+        for p in paths:
+            if p is None:
+                continue
+            nodes = tuple(int(x) for x in p)
+            if len(nodes) < 2:
+                continue
+            links = [(nodes[i], nodes[i+1]) for i in range(len(nodes)-1)]
+            # Key by node endpoints (like original read_choice_set),
+            # not zones — the agent lookup uses from_origin_node_id.
+            key = (float(nodes[0]), float(nodes[-1]))
+            out.setdefault(key, [])
+            # Avoid duplicate routes for the same node OD
+            if (nodes, links) not in out[key]:
+                out[key].append((nodes, links))
+    return out
+
+
 def read_free_flow_times(xlsx_path):
     """Free-flow minutes per directed link from SiouxFalls_net.xlsx.
 
@@ -723,16 +781,23 @@ def main(argv=None):
     print("seed = %d (deterministic script; accepted for API parity)"
           % args.seed)
 
-    free_flow = read_free_flow_times(os.path.join(data_dir, "SiouxFalls_net.xlsx"))
+    if netconfig.is_baltimore():
+        free_flow = read_free_flow_times_baltimore(
+            os.path.join(data_dir, "input_link.csv"))
+    else:
+        free_flow = read_free_flow_times(os.path.join(data_dir, "SiouxFalls_net.xlsx"))
     print("network: %d directed links" % len(free_flow))
 
     template_path = os.path.join(data_dir, "input_agent_initial.csv")
     template_df, meta = read_demand(template_path)
     print("demand: %d agents" % len(template_df))
 
-    od_routes = read_choice_set(
-        os.path.join(data_dir, "choice set no overlap try.mat")
-    )
+    if netconfig.is_baltimore():
+        od_routes = read_choice_set_baltimore(data_dir)
+    else:
+        od_routes = read_choice_set(
+            os.path.join(data_dir, "choice set no overlap try.mat")
+        )
     print("choice set: %d ODs" % len(od_routes))
 
     agents = template_df.sort_values("_departure").reset_index(drop=True)
