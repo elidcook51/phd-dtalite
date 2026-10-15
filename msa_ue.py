@@ -1131,6 +1131,10 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1,
 
 
             inputagent[j][11] = ue_route[jj]
+            _nd = [x.strip() for x in str(ue_route[jj]).split(';') if x.strip()]
+            if len(_nd) >= 2:
+                inputagent[j][4] = _nd[0]
+                inputagent[j][5] = _nd[-1]
 
 
 
@@ -1341,6 +1345,10 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1,
                 )
 
             inputagent[j][11] = ue_route[jj]
+            _nd = [x.strip() for x in str(ue_route[jj]).split(';') if x.strip()]
+            if len(_nd) >= 2:
+                inputagent[j][4] = _nd[0]
+                inputagent[j][5] = _nd[-1]
 
         else:
 

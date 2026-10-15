@@ -1157,6 +1157,10 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
         ]
         if _p is not None:
             inputagent[j][11] = _p
+            _nodes = [x.strip() for x in str(_p).split(';') if x.strip()]
+            if len(_nodes) >= 2:
+                inputagent[j][4] = _nodes[0]
+                inputagent[j][5] = _nodes[-1]
 
 
 
@@ -1282,6 +1286,10 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
         ]
         if _p is not None:
             inputagent[j][11] = _p
+            _nodes = [x.strip() for x in str(_p).split(';') if x.strip()]
+            if len(_nodes) >= 2:
+                inputagent[j][4] = _nodes[0]
+                inputagent[j][5] = _nodes[-1]
 
 
 
