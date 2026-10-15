@@ -47,6 +47,10 @@ import realtimeassignment as _realtime_mod
 
 #: Name of the shared DTALite working folder (relative to the repo root).
 SOURCE_DIR = "DTALite_Files"
+NETWORK_SOURCE_DIRS = {
+    "siouxfalls": "DTALite_Files",
+    "baltimore": "baltimore_files",
+}
 
 #: Sandbox folders are named ``Run0``, ``Run1``, ... under the repo root.
 SANDBOX_PREFIX = "Run"
@@ -242,9 +246,10 @@ def msa_parallel_ue(bigloop, p, p_fix, p_realtime, ue_routes_path,
     """
     run_id = bigloop if run_id is None else run_id
     repo_root = os.path.abspath(repo_root or os.getcwd())
-    dest_dir = os.path.join(repo_root, SOURCE_DIR)
+    source_dir = NETWORK_SOURCE_DIRS.get(network, SOURCE_DIR)
+    dest_dir = os.path.join(repo_root, source_dir)
 
-    run_dir = stage_run_dir(run_id, repo_root=repo_root)
+    run_dir = stage_run_dir(run_id, source_dir=source_dir, repo_root=repo_root)
     try:
         with _sandbox_cwd(run_dir):
             # Mirror runner.py's per-iteration setup inside the sandbox.
@@ -677,7 +682,8 @@ def run_parallel_msa_ue(schedule, ue_routes_path, max_workers=None,
         last_ok = max(all_ok.values(), key=lambda r: r["bigloop"])
         collect_shared_results(
             sandbox_path(last_ok["run_id"], repo_root),
-            dest_dir=os.path.join(repo_root, SOURCE_DIR),
+            dest_dir=os.path.join(
+                repo_root, NETWORK_SOURCE_DIRS.get(network, SOURCE_DIR)),
         )
 
     # Cleanup: delete sandboxes ONLY on full success.
