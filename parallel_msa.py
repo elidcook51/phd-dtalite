@@ -99,6 +99,27 @@ SHARED_RESULT_NAMES = [
 # indefinitely at 100%%).
 BIGLOOP_TIMEOUT_S = 3600
 
+#: Per-bigloop wall-clock budget, measured from batch submission. A bigloop
+#: still pending after this long is killed and marked failed (then retried
+#: once) instead of holding the whole sweep hostage. Normal bigloops take
+#: ~40-45 min; this gives a comfortable margin. A dynamic timeout (2x the
+#: median peer duration, once >=3 bigloops finish) can fire earlier.
+PER_BIGLOOP_TIMEOUT_S = 3000
+
+#: Worker self-watchdog. A daemon thread inside each pool worker calls
+#: os._exit(2) if the worker is still alive after this long. This converts
+#: ANY worker-side hang (infinite loop, deadlocked I/O, stuck teardown --
+#: e.g. the observed "20/20 done but never returned" hang) into a loud
+#: failure the parent sees as BrokenProcessPoolError, instead of hanging
+#: the sweep. Must exceed PER_BIGLOOP_TIMEOUT_S so the parent's orderly
+#: per-bigloop timeout normally fires first; this is the backstop for when
+#: the parent itself cannot act.
+WORKER_WATCHDOG_S = 3300
+
+#: How many times a failed/timed-out bigloop is retried with a fresh worker
+#: pool before being recorded as a permanent failure.
+MAX_RETRIES = 1
+
 
 
 def _result_names(bigloop):
@@ -398,12 +419,56 @@ def runner_schedule(n=11):
     return schedule
 
 
+def _start_worker_watchdog():
+    """Arm a daemon thread that kills this worker if it runs too long.
+
+    Must be called at the top of the pool worker entry point. If the
+    worker is still alive after WORKER_WATCHDOG_S seconds, the thread
+    writes a message to stderr and calls os._exit(2). This is the last
+    line of defense against worker-side hangs that the parent cannot
+    detect (infinite loops, deadlocked teardown): the parent sees the
+    future fail with BrokenProcessPoolError instead of waiting forever.
+    A normally-completing worker exits long before the watchdog fires.
+    """
+    def _watchdog():
+        time.sleep(WORKER_WATCHDOG_S)
+        try:
+            sys.stderr.write(
+                "\nWORKER WATCHDOG: worker still alive after %ds; "
+                "it is stuck -- forcing os._exit(2)\n" % WORKER_WATCHDOG_S)
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os._exit(2)
+
+    t = threading.Thread(target=_watchdog, daemon=True,
+                         name="worker-watchdog")
+    t.start()
+
+
+class SweepResults(list):
+    """Per-bigloop result dicts with an explicit failure record.
+
+    Behaves as a plain list of the successful per-bigloop result dicts
+    (len(), iteration, sorting all work as usual), plus a ``failures``
+    attribute mapping bigloop -> human-readable error string for bigloops
+    that did not complete even after retries. An empty ``failures`` dict
+    means full success. Callers must check ``.failures``; a non-empty
+    mapping means the sweep was partial.
+    """
+
+    def __init__(self, results=(), failures=None):
+        super().__init__(results)
+        self.failures = dict(failures or {})
+
+
 def _msa_worker(task):
     """
     Top-level worker entry point (must stay top-level for pickling with the
     *spawn* start method on Windows).  ``task`` is a plain dict of keyword
     arguments for ``msa_parallel``.
     """
+    _start_worker_watchdog()
     return msa_parallel(**task)
 
 
@@ -438,8 +503,117 @@ def _kill_all_workers():
     return killed
 
 
+def _run_batch(task_list, max_workers, repo_root, msa_fn, seed,
+               worker_fn):
+    """Run one batch of bigloop tasks to completion-or-failure.
+
+    Returns ``(ok, failed)`` where ``ok`` maps bigloop -> result dict and
+    ``failed`` maps bigloop -> human-readable error string.
+
+    Guarantees:
+    * Per-bigloop failures (task exception, worker death/crash, timeout)
+      are recorded, never raised: the batch always returns.
+    * A per-bigloop timeout kills stuck workers so one hung bigloop cannot
+      stall the batch. The budget is ``PER_BIGLOOP_TIMEOUT_S``, tightened
+      dynamically to 2x the median peer duration once >=3 bigloops finish
+      (a hung bigloop is then detected in ~2x normal time, not after the
+      full budget). ``BIGLOOP_TIMEOUT_S`` remains as an absolute backstop.
+    * Sandboxes are left untouched on disk; the caller decides cleanup.
+    * The poll loop can never busy-spin (unconditional sleep while work
+      remains) and never waits forever.
+    """
+    ok = {}
+    failed = {}
+    if not task_list:
+        return ok, failed
+
+    futures = {}
+    submit_time = time.monotonic()
+    completed_durations = []
+    executor = concurrent.futures.ProcessPoolExecutor(
+        max_workers=max_workers)
+    try:
+        futures = {executor.submit(worker_fn, task): task
+                   for task in task_list}
+        pending = set(futures)
+        processed = set()
+        while pending:
+            # Poll with a short timeout so completion is detected promptly
+            # without busy-spinning.
+            done, still_pending = concurrent.futures.wait(
+                pending, timeout=5.0,
+                return_when=concurrent.futures.FIRST_COMPLETED)
+            now = time.monotonic()
+            for future in done:
+                if future in processed:
+                    continue
+                processed.add(future)
+                task = futures[future]
+                bl = task["bigloop"]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    # Worker died (watchdog kill, crash) or the task raised.
+                    # BrokenProcessPoolError specifically means the worker
+                    # process went away unexpectedly.
+                    failed[bl] = "%s: %s" % (type(exc).__name__, exc)
+                else:
+                    ok[bl] = result
+                    completed_durations.append(now - submit_time)
+            pending = still_pending - processed
+
+            if pending:
+                elapsed = now - submit_time
+                # Dynamic timeout: once peers establish the expected
+                # duration, a bigloop taking >2x the median is hung.
+                if len(completed_durations) >= 3:
+                    median = sorted(completed_durations)[
+                        len(completed_durations) // 2]
+                    dyn_timeout = max(1800.0, 2.0 * median)
+                else:
+                    dyn_timeout = float("inf")
+                timeout = min(float(PER_BIGLOOP_TIMEOUT_S),
+                              dyn_timeout,
+                              float(BIGLOOP_TIMEOUT_S))
+                if elapsed > timeout:
+                    for future in pending:
+                        task = futures[future]
+                        bl = task["bigloop"]
+                        if bl not in ok and bl not in failed:
+                            failed[bl] = (
+                                "timed out after %.0fs (budget %.0fs); "
+                                "worker killed" % (elapsed, timeout))
+                    # Kill stuck workers now; do not wait for them. This
+                    # may break the pool, but every pending future has been
+                    # recorded as failed above and retries use a fresh
+                    # executor, so the breakage is contained.
+                    try:
+                        executor.shutdown(wait=False,
+                                          cancel_futures=True)
+                    except Exception:
+                        pass
+                    _kill_all_workers()
+                    pending = set()
+            if pending:
+                # Belt-and-suspenders: wait() already blocked up to 5s;
+                # this guarantees no busy-spin even if wait() returns early.
+                time.sleep(1.0)
+    finally:
+        # Never block on stuck workers. Then aggressively kill anything
+        # still alive so no spinning orphans survive this batch.
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        _kill_all_workers()
+        time.sleep(2.0)
+        _kill_all_workers()
+    return ok, failed
+
+
 def run_parallel_msa(schedule, max_workers=None, repo_root=None,
-                     keep_on_failure=True, msa_fn=None, seed=1):
+                     keep_on_failure=True, msa_fn=None, seed=1,
+                     max_retries=MAX_RETRIES):
     """
     Run many MSA iterations concurrently, one sandbox (``RunX/``) per
     iteration.
@@ -453,29 +627,52 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
         copy of ``DTALite.exe``, so size this to your CPU/RAM.
     repo_root : repo root containing ``DTALite_Files/``; defaults to cwd.
     keep_on_failure : keep failed runs' ``RunX/`` folders for inspection.
+        (v3: on any failure ALL sandboxes are kept regardless; this flag
+        only matters for the all-success path, which is unchanged.)
     msa_fn : optional ``(bigloop, p, p_fix, p_realtime)`` callable used
         instead of ``msa.msa`` in every worker (testing hook; must be a
         top-level function to survive pickling).
     seed : RNG seed for ``dividerand`` (user-type assignment). Default: 1.
+    max_retries : how many times a failed/timed-out bigloop is retried with
+        a fresh worker pool before being recorded as a permanent failure.
+        Default: 1.
 
     Returns
     -------
-    list of per-iteration result dicts (in completion order).
+    SweepResults
+        List of per-iteration result dicts for the bigloops that succeeded,
+        with a ``.failures`` dict mapping bigloop -> error string for
+        bigloops that failed even after ``max_retries`` retries. Check
+        ``.failures``: non-empty means the sweep was partial.
 
-    The shared (non-iteration-tagged) result files are copied back once,
-    from the highest-``bigloop`` run, so the final on-disk state matches a
-    serial ``runner.py`` run.  Every sandbox is deleted afterwards (unless a
-    run failed and ``keep_on_failure`` is True).
+    Failure handling (v3 -- fail granular, never catastrophic):
+    * A bigloop that raises, whose worker dies, or that exceeds its time
+      budget is marked failed; it never aborts the other bigloops.
+    * Failed bigloops are retried up to ``max_retries`` times with a fresh
+      worker pool (a fresh ``ProcessPoolExecutor`` per attempt, so a broken
+      pool can never poison the retry).
+    * Each worker arms a watchdog thread (``WORKER_WATCHDOG_S``) that calls
+      ``os._exit(2)`` if the worker is still alive after the budget. This
+      converts ANY worker-side hang -- including the observed "20/20 done
+      but never returned" teardown hang -- into a loud failure instead of
+      an infinite stall.
+    * Sandboxes are deleted ONLY on full success. On any failure, every
+      sandbox is kept for inspection. Per-bigloop result CSVs are harvested
+      to ``DTALite_Files/`` by each worker as it finishes, so a timeout can
+      never again destroy succeeded results: the data is already on disk
+      before any cleanup decision is made.
+    * The shared (non-iteration-tagged) result files are copied from the
+      highest *successful* bigloop.
     """
     repo_root = os.path.abspath(repo_root or os.getcwd())
     if not schedule:
-        return []
+        return SweepResults()
     if max_workers is None:
         max_workers = min(len(schedule), os.cpu_count() or 1)
     max_workers = max(1, max_workers)
 
-    tasks = [
-        {
+    def _make_task(bigloop, p, p_fix, p_realtime):
+        return {
             "bigloop": bigloop,
             "p": p,
             "p_fix": p_fix,
@@ -483,97 +680,62 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
             "run_id": bigloop,
             "repo_root": repo_root,
             "keep_on_failure": keep_on_failure,
-            "cleanup": False,  # orchestrator harvests shared files first
+            "cleanup": False,  # orchestrator deletes only on full success
             "msa_fn": msa_fn,
             "seed": seed,
         }
-        for (bigloop, p, p_fix, p_realtime) in schedule
-    ]
 
-    results = []
-    futures = {}
-    try:
-        executor = concurrent.futures.ProcessPoolExecutor(
-            max_workers=max_workers
-        )
-        try:
-            futures = {
-                executor.submit(_msa_worker, task): task for task in tasks
-            }
-            pending = set(futures)
-            _POLL_INTERVAL_S = 5.0  # never busy-spin: sleep between polls
-            _t_start = time.monotonic()
-            _processed = set()
-            while pending:
-                # Poll with a short timeout so we can detect completion
-                # promptly without busy-spinning. The sleep below guarantees
-                # we never spin at 100% CPU even if wait() returns early.
-                done, still_pending = concurrent.futures.wait(
-                    pending, timeout=_POLL_INTERVAL_S,
-                    return_when=concurrent.futures.FIRST_COMPLETED)
-                for future in done:
-                    if future in _processed:
-                        continue
-                    _processed.add(future)
-                    task = futures[future]
-                    try:
-                        results.append(future.result())
-                    except Exception as exc:
-                        raise RuntimeError(
-                            f"Parallel MSA run failed for bigloop={task['bigloop']} "
-                            f"(sandbox Run{task['run_id']})."
-                        ) from exc
-                pending = still_pending - _processed
-                # Absolute timeout: fail fast naming stuck bigloops
-                _elapsed = time.monotonic() - _t_start
-                if pending and _elapsed > BIGLOOP_TIMEOUT_S:
-                    hung = sorted(futures[f]["bigloop"] for f in pending)
-                    raise RuntimeError(
-                        f"Parallel MSA timed out after {BIGLOOP_TIMEOUT_S}s "
-                        f"waiting for bigloops={hung} "
-                        f"(sandbox(s) {[futures[f]['run_id'] for f in pending]})."
-                    )
-                if pending:
-                    # Sleep to avoid busy-spinning; wait() above already
-                    # blocked for _POLL_INTERVAL_S, this is belt-and-suspenders
-                    time.sleep(1.0)
-        finally:
-            # Never block forever on stuck workers: cancel what has not
-            # started and do NOT wait for running workers. Then
-            # aggressively kill any workers still alive so they cannot
-            # linger as spinning orphans after this process exits.
-            try:
-                executor.shutdown(wait=False, cancel_futures=True)
-            except Exception:
-                pass
-            _kill_all_workers()
-            # Brief grace period, then a second sweep for stragglers
-            time.sleep(2.0)
-            _kill_all_workers()
+    schedule_tuples = list(schedule)
+    all_ok = {}
+    all_failed = {}
+    remaining = list(schedule_tuples)
+    attempt = 0
+    while remaining:
+        attempt += 1
+        task_list = [_make_task(*s) for s in remaining]
+        ok, failed = _run_batch(task_list, max_workers, repo_root,
+                                msa_fn, seed, _msa_worker)
+        all_ok.update(ok)
+        if not failed:
+            break
+        if attempt > max_retries:
+            all_failed.update(failed)
+            break
+        warnings.warn(
+            "run_parallel_msa: %d bigloop(s) failed on attempt %d: %s; "
+            "retrying with fresh workers." % (
+                len(failed), attempt,
+                ", ".join("bigloop=%s (%s)" % (bl, err)
+                          for bl, err in sorted(failed.items()))))
+        remaining = [s for s in schedule_tuples if s[0] in failed]
 
-        # Mimic serial semantics: shared result files come from the last
-        # (highest bigloop) iteration.
-        last = max(tasks, key=lambda t: t["bigloop"])
+    # Shared result files from the highest *successful* bigloop, so the
+    # final on-disk state matches a serial run as closely as possible.
+    if all_ok:
+        last_ok = max(all_ok.values(), key=lambda r: r["bigloop"])
         collect_shared_results(
-            sandbox_path(last["run_id"], repo_root),
+            sandbox_path(last_ok["run_id"], repo_root),
             dest_dir=os.path.join(repo_root, SOURCE_DIR),
         )
-        return results
-    finally:
-        # The inner finally already shut the executor down without waiting,
-        # so some futures may be unfinished/cancelled here; classify each
-        # run by its actual outcome rather than by consumed results.
-        for fut, task in futures.items():
-            try:
-                succeeded = (fut.done() and not fut.cancelled()
-                             and fut.exception() is None)
-            except Exception:
-                succeeded = False
-            run_dir = sandbox_path(task["run_id"], repo_root)
+
+    # Cleanup: delete sandboxes ONLY on full success. On any failure, keep
+    # EVERYTHING -- disk is cheap, recompute is expensive, and the
+    # per-bigloop CSVs were already harvested to DTALite_Files/ by the
+    # workers, so keeping the sandboxes is purely for debugging and can
+    # never destroy data.
+    if not all_failed:
+        for bl in sorted(all_ok):
+            run_dir = sandbox_path(all_ok[bl]["run_id"], repo_root)
             if os.path.exists(run_dir):
-                if succeeded or not keep_on_failure:
-                    cleanup_run_dir(run_dir)
-                else:
-                    warnings.warn(
-                        f"Keeping failed sandbox for inspection: {run_dir}"
-                    )
+                cleanup_run_dir(run_dir)
+    else:
+        warnings.warn(
+            "run_parallel_msa: sweep partial: %d/%d bigloops succeeded; "
+            "%d failed %s. Keeping ALL sandboxes for inspection. "
+            "Succeeded bigloops' result files were harvested to %s/ by "
+            "their workers before the failure." % (
+                len(all_ok), len(schedule_tuples), len(all_failed),
+                sorted(all_failed), SOURCE_DIR))
+
+    return SweepResults([all_ok[bl] for bl in sorted(all_ok)],
+                        failures=all_failed)

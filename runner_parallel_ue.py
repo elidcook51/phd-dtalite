@@ -153,6 +153,24 @@ def main():
     _wd = threading.Thread(target=_watchdog, daemon=True)
     _wd.start()
 
+    failures = getattr(results, "failures", {})
+    if failures and not results:
+        print(f"ERROR: all {len(failures)} iterations failed: "
+              f"{sorted(failures)}", file=sys.stderr, flush=True)
+        for bl, err in sorted(failures.items()):
+            print(f"  bigloop {bl}: {err}", file=sys.stderr, flush=True)
+        return 1
+    if failures:
+        # Partial success: the succeeded bigloops' result files were
+        # harvested to DTALite_Files/ by their workers and all sandboxes
+        # were kept. Exit 0 so wholerunner collects the partial sweep;
+        # the missing bigloops are loudly reported here and noted by
+        # mpr_aggregate.py in mpr_summary.txt.
+        print(f"WARNING: sweep partial: {len(results)} succeeded, "
+              f"{len(failures)} failed (bigloops={sorted(failures)}).",
+              file=sys.stderr, flush=True)
+        for bl, err in sorted(failures.items()):
+            print(f"  bigloop {bl}: {err}", file=sys.stderr, flush=True)
     print(f"All {len(results)} iterations finished in {elapsed:.1f}s.", flush=True)
     for r in sorted(results, key=lambda d: d["bigloop"]):
         print(f"  bigloop={r['bigloop']}: "

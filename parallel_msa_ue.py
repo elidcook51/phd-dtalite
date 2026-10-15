@@ -67,6 +67,18 @@ SHARED_RESULT_NAMES = [
 # indefinitely at 100%%).
 BIGLOOP_TIMEOUT_S = 3600
 
+#: Per-bigloop wall-clock budget, measured from batch submission. A bigloop
+#: still pending after this long is killed and marked failed (then retried
+#: once) instead of holding the whole sweep hostage.
+PER_BIGLOOP_TIMEOUT_S = 3000
+
+#: Worker self-watchdog (see parallel_msa.py): os._exit(2) if the worker is
+#: still alive after this long. Backstop for worker-side hangs.
+WORKER_WATCHDOG_S = 3300
+
+#: Retries for a failed/timed-out bigloop before permanent failure.
+MAX_RETRIES = 1
+
 
 
 def _result_names(bigloop):
@@ -376,12 +388,48 @@ def runner_schedule(n=11):
     return schedule
 
 
+def _start_worker_watchdog():
+    """Arm a daemon thread that kills this worker if it runs too long.
+
+    See parallel_msa._start_worker_watchdog: os._exit(2) after
+    WORKER_WATCHDOG_S seconds. Converts any worker-side hang into a loud
+    failure (BrokenProcessPoolError) instead of an infinite stall.
+    """
+    def _watchdog():
+        time.sleep(WORKER_WATCHDOG_S)
+        try:
+            sys.stderr.write(
+                "\nWORKER WATCHDOG: worker still alive after %ds; "
+                "it is stuck -- forcing os._exit(2)\n" % WORKER_WATCHDOG_S)
+            sys.stderr.flush()
+        except Exception:
+            pass
+        os._exit(2)
+
+    t = threading.Thread(target=_watchdog, daemon=True,
+                         name="worker-watchdog")
+    t.start()
+
+
+class SweepResults(list):
+    """Per-bigloop result dicts with an explicit failure record.
+
+    Behaves as a plain list of the successful per-bigloop result dicts,
+    plus a ``failures`` attribute mapping bigloop -> error string.
+    """
+
+    def __init__(self, results=(), failures=None):
+        super().__init__(results)
+        self.failures = dict(failures or {})
+
+
 def _msa_ue_worker(task):
     """
     Top-level worker entry point (must stay top-level for pickling with the
     *spawn* start method on Windows).  ``task`` is a plain dict of keyword
     arguments for ``msa_parallel_ue``.
     """
+    _start_worker_watchdog()
     return msa_parallel_ue(**task)
 
 
@@ -415,9 +463,94 @@ def _kill_all_workers():
     return killed
 
 
+def _run_batch(task_list, max_workers, repo_root, msa_fn, seed,
+               worker_fn):
+    """Run one batch of bigloop tasks to completion-or-failure.
+
+    Returns ``(ok, failed)`` where ``ok`` maps bigloop -> result dict and
+    ``failed`` maps bigloop -> human-readable error string. Per-bigloop
+    failures never raise; the batch always returns. A per-bigloop timeout
+    (``PER_BIGLOOP_TIMEOUT_S``, dynamically tightened to 2x the median peer
+    duration once >=3 finish) kills stuck workers. Sandboxes are left
+    untouched; the caller decides cleanup.
+    """
+    ok = {}
+    failed = {}
+    if not task_list:
+        return ok, failed
+
+    futures = {}
+    submit_time = time.monotonic()
+    completed_durations = []
+    executor = concurrent.futures.ProcessPoolExecutor(
+        max_workers=max_workers)
+    try:
+        futures = {executor.submit(worker_fn, task): task
+                   for task in task_list}
+        pending = set(futures)
+        processed = set()
+        while pending:
+            done, still_pending = concurrent.futures.wait(
+                pending, timeout=5.0,
+                return_when=concurrent.futures.FIRST_COMPLETED)
+            now = time.monotonic()
+            for future in done:
+                if future in processed:
+                    continue
+                processed.add(future)
+                task = futures[future]
+                bl = task["bigloop"]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    failed[bl] = "%s: %s" % (type(exc).__name__, exc)
+                else:
+                    ok[bl] = result
+                    completed_durations.append(now - submit_time)
+            pending = still_pending - processed
+
+            if pending:
+                elapsed = now - submit_time
+                if len(completed_durations) >= 3:
+                    median = sorted(completed_durations)[
+                        len(completed_durations) // 2]
+                    dyn_timeout = max(1800.0, 2.0 * median)
+                else:
+                    dyn_timeout = float("inf")
+                timeout = min(float(PER_BIGLOOP_TIMEOUT_S),
+                              dyn_timeout,
+                              float(BIGLOOP_TIMEOUT_S))
+                if elapsed > timeout:
+                    for future in pending:
+                        task = futures[future]
+                        bl = task["bigloop"]
+                        if bl not in ok and bl not in failed:
+                            failed[bl] = (
+                                "timed out after %.0fs (budget %.0fs); "
+                                "worker killed" % (elapsed, timeout))
+                    try:
+                        executor.shutdown(wait=False,
+                                          cancel_futures=True)
+                    except Exception:
+                        pass
+                    _kill_all_workers()
+                    pending = set()
+            if pending:
+                time.sleep(1.0)
+    finally:
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        _kill_all_workers()
+        time.sleep(2.0)
+        _kill_all_workers()
+    return ok, failed
+
+
 def run_parallel_msa_ue(schedule, ue_routes_path, max_workers=None,
                         repo_root=None, keep_on_failure=True, msa_fn=None,
-                        seed=1):
+                        seed=1, max_retries=MAX_RETRIES):
     """
     Run many UE-guidance MSA iterations concurrently, one sandbox
     (``RunX/``) per iteration.
@@ -434,30 +567,39 @@ def run_parallel_msa_ue(schedule, ue_routes_path, max_workers=None,
         copy of ``DTALite.exe``, so size this to your CPU/RAM.
     repo_root : repo root containing ``DTALite_Files/``; defaults to cwd.
     keep_on_failure : keep failed runs' ``RunX/`` folders for inspection.
+        (v3: on any failure ALL sandboxes are kept regardless.)
     msa_fn : optional
         ``(bigloop, p, p_fix, p_realtime, ue_routes_path)`` callable used
         instead of ``msa_ue.msa_ue`` in every worker (testing hook; must be a
         top-level function to survive pickling).
     seed : RNG seed for ``dividerand`` (user-type assignment). Default: 1.
+    max_retries : retries for a failed/timed-out bigloop before permanent
+        failure. Default: 1.
 
     Returns
     -------
-    list of per-iteration result dicts (in completion order).
+    SweepResults
+        List of per-iteration result dicts for succeeded bigloops, with a
+        ``.failures`` dict mapping bigloop -> error string. Non-empty
+        ``.failures`` means the sweep was partial.
 
-    The shared (non-iteration-tagged) result files are copied back once,
-    from the highest-``bigloop`` run, so the final on-disk state matches a
-    serial run.  Every sandbox is deleted afterwards (unless a
-    run failed and ``keep_on_failure`` is True).
+    Failure handling (v3): per-bigloop failures (exception, worker death,
+    timeout) are recorded as warnings and retried once; the sweep continues
+    with the remaining bigloops. Each worker arms a watchdog thread that
+    calls ``os._exit(2)`` if stuck, converting hangs into loud failures.
+    Sandboxes are deleted ONLY on full success; on any failure everything
+    is kept. Shared result files come from the highest *successful* bigloop.
+    Raises ``RuntimeError`` only if ALL bigloops failed.
     """
     repo_root = os.path.abspath(repo_root or os.getcwd())
     if not schedule:
-        return []
+        return SweepResults()
     if max_workers is None:
         max_workers = min(len(schedule), os.cpu_count() or 1)
     max_workers = max(1, max_workers)
 
-    tasks = [
-        {
+    def _make_task(bigloop, p, p_fix, p_realtime):
+        return {
             "bigloop": bigloop,
             "p": p,
             "p_fix": p_fix,
@@ -466,114 +608,66 @@ def run_parallel_msa_ue(schedule, ue_routes_path, max_workers=None,
             "run_id": bigloop,
             "repo_root": repo_root,
             "keep_on_failure": keep_on_failure,
-            "cleanup": False,  # orchestrator harvests shared files first
+            "cleanup": False,  # orchestrator deletes only on full success
             "msa_fn": msa_fn,
             "seed": seed,
         }
-        for (bigloop, p, p_fix, p_realtime) in schedule
-    ]
 
-    results = []
-    failures = []
-    futures = {}
-    try:
-        executor = concurrent.futures.ProcessPoolExecutor(
-            max_workers=max_workers
-        )
-        try:
-            futures = {
-                executor.submit(_msa_ue_worker, task): task for task in tasks
-            }
-            pending = set(futures)
-            _POLL_INTERVAL_S = 5.0  # never busy-spin: sleep between polls
-            _t_start = time.monotonic()
-            _processed = set()
-            while pending:
-                # Poll with a short timeout so we can detect completion
-                # promptly without busy-spinning.
-                done, still_pending = concurrent.futures.wait(
-                    pending, timeout=_POLL_INTERVAL_S,
-                    return_when=concurrent.futures.FIRST_COMPLETED)
-                for future in done:
-                    if future in _processed:
-                        continue
-                    _processed.add(future)
-                    task = futures[future]
-                    try:
-                        results.append(future.result())
-                    except Exception as exc:
-                        # Resilient: record the failure and continue with
-                        # remaining bigloops instead of aborting the sweep.
-                        # The failed sandbox is kept for inspection (see
-                        # finally block below).
-                        failures.append(task['bigloop'])
-                        warnings.warn(
-                            f"UE-guidance MSA run failed for bigloop={task['bigloop']} "
-                            f"(sandbox Run{task['run_id']} kept for inspection): {exc}"
-                        )
-                pending = still_pending - _processed
-                # Absolute timeout: record stuck bigloops as failures
-                _elapsed = time.monotonic() - _t_start
-                if pending and _elapsed > BIGLOOP_TIMEOUT_S:
-                    for future in pending:
-                        task = futures[future]
-                        failures.append(task['bigloop'])
-                        warnings.warn(
-                            f"UE-guidance MSA run timed out after {BIGLOOP_TIMEOUT_S}s "
-                            f"for bigloop={task['bigloop']} "
-                            f"(sandbox Run{task['run_id']} kept for inspection)."
-                        )
-                    pending = set()
-                if pending:
-                    time.sleep(1.0)  # never busy-spin
-        finally:
-            # Never block forever on stuck workers: cancel what has not
-            # started and do NOT wait for running workers. Then
-            # aggressively kill any workers still alive so they cannot
-            # linger as spinning orphans after this process exits.
-            try:
-                executor.shutdown(wait=False, cancel_futures=True)
-            except Exception:
-                pass
-            _kill_all_workers()
-            time.sleep(2.0)
-            _kill_all_workers()
-
-        # Mimic serial semantics: shared result files come from the last
-        # (highest bigloop) iteration -- use the highest *successful* one.
-        if results:
-            last_ok = max(results, key=lambda r: r["bigloop"])
-            collect_shared_results(
-                sandbox_path(last_ok["run_id"], repo_root),
-                dest_dir=os.path.join(repo_root, SOURCE_DIR),
-            )
-        if failures:
-            if not results:
-                raise RuntimeError(
-                    f"All {len(failures)} UE-guidance MSA runs failed "
-                    f"(bigloops={sorted(failures)}). Sandboxes kept for inspection."
-                )
+    schedule_tuples = list(schedule)
+    all_ok = {}
+    all_failed = {}
+    remaining = list(schedule_tuples)
+    attempt = 0
+    while remaining:
+        attempt += 1
+        task_list = [_make_task(*s) for s in remaining]
+        ok, failed = _run_batch(task_list, max_workers, repo_root,
+                                msa_fn, seed, _msa_ue_worker)
+        all_ok.update(ok)
+        # Resilient: record failures, continue; retry failed bigloops.
+        for bl, err in sorted(failed.items()):
             warnings.warn(
-                f"UE-guidance MSA sweep partially completed: "
-                f"{len(results)} succeeded, {len(failures)} failed "
-                f"(bigloops={sorted(failures)}). Failed sandboxes kept."
-            )
-        return results
-    finally:
-        # The inner finally already shut the executor down without waiting,
-        # so some futures may be unfinished/cancelled here; classify each
-        # run by its actual outcome rather than by consumed results.
-        for fut, task in futures.items():
-            try:
-                succeeded = (fut.done() and not fut.cancelled()
-                             and fut.exception() is None)
-            except Exception:
-                succeeded = False
-            run_dir = sandbox_path(task["run_id"], repo_root)
+                "UE-guidance MSA run failed for bigloop=%s (attempt %d): %s"
+                % (bl, attempt, err))
+        if not failed:
+            break
+        if attempt > max_retries:
+            all_failed.update(failed)
+            break
+        warnings.warn(
+            "run_parallel_msa_ue: retrying %d failed bigloop(s) with fresh "
+            "workers." % len(failed))
+        remaining = [s for s in schedule_tuples if s[0] in failed]
+
+    # Shared result files from the highest *successful* bigloop.
+    if all_ok:
+        last_ok = max(all_ok.values(), key=lambda r: r["bigloop"])
+        collect_shared_results(
+            sandbox_path(last_ok["run_id"], repo_root),
+            dest_dir=os.path.join(repo_root, SOURCE_DIR),
+        )
+
+    # Cleanup: delete sandboxes ONLY on full success.
+    if not all_failed:
+        for bl in sorted(all_ok):
+            run_dir = sandbox_path(all_ok[bl]["run_id"], repo_root)
             if os.path.exists(run_dir):
-                if succeeded or not keep_on_failure:
-                    cleanup_run_dir(run_dir)
-                else:
-                    warnings.warn(
-                        f"Keeping failed sandbox for inspection: {run_dir}"
-                    )
+                cleanup_run_dir(run_dir)
+    else:
+        warnings.warn(
+            "run_parallel_msa_ue: sweep partial: %d/%d bigloops succeeded; "
+            "%d failed %s. Keeping ALL sandboxes for inspection." % (
+                len(all_ok), len(schedule_tuples), len(all_failed),
+                sorted(all_failed)))
+
+    if all_failed and not all_ok:
+        raise RuntimeError(
+            "All %d UE-guidance MSA runs failed (bigloops=%s). Sandboxes "
+            "kept for inspection." % (len(all_failed), sorted(all_failed)))
+    if all_failed:
+        warnings.warn(
+            "UE-guidance MSA sweep partially completed: %d succeeded, %d "
+            "failed (bigloops=%s). Failed sandboxes kept." % (
+                len(all_ok), len(all_failed), sorted(all_failed)))
+    return SweepResults([all_ok[bl] for bl in sorted(all_ok)],
+                        failures=all_failed)
