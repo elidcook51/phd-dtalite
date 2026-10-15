@@ -87,7 +87,8 @@ T1_MIN_PER_AGENT = 27.44
 # v9 pipeline support scripts (shared by Test 1 and Test 5's proposed sweep)
 V9_SCRIPTS = ["runner_parallel.py", "parallel_msa.py", "msa.py",
               "assignment.py", "realtimeassignment.py",
-              "traveltimecal.py", "progress.py", "choiceset.py"]
+              "traveltimecal.py", "progress.py", "choiceset.py",
+              "netconfig.py"]
 
 # Test registry. "kind" tells main() how to run the entry:
 #   "v9" / "scenario" -- one sandbox, one command sequence (run_test)
@@ -99,15 +100,18 @@ TESTS = {
         "scripts": V9_SCRIPTS},
     2: {"label": "Test 2: real-time guidance, sigma=1 min",
         "kind": "scenario",
-        "scripts": ["scenarios_realtime.py", "preference_reaction.py"],
+        "scripts": ["scenarios_realtime.py", "preference_reaction.py",
+                    "netconfig.py"],
         "sigma": 1, "target": TARGETS[2]},
     3: {"label": "Test 3: real-time guidance, sigma=10 min",
         "kind": "scenario",
-        "scripts": ["scenarios_realtime.py", "preference_reaction.py"],
+        "scripts": ["scenarios_realtime.py", "preference_reaction.py",
+                    "netconfig.py"],
         "sigma": 10, "target": TARGETS[3]},
     4: {"label": "Test 4: UE as information (MSA baseline)",
         "kind": "scenario",
-        "scripts": ["scenarios_ue.py", "preference_reaction.py"],
+        "scripts": ["scenarios_ue.py", "preference_reaction.py",
+                    "netconfig.py"],
         "target": TARGETS[4]},
     5: {"label": "Test 5: MPR sweep (Proposed + UE-guidance)",
         "kind": "dual-sweep",
