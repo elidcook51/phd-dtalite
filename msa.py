@@ -314,7 +314,12 @@ def _baltimore_fallback_paths(missing_ods):
             try:
                 _u = int(float(_row['from_node_id']))
                 _v = int(float(_row['to_node_id']))
-                _t = float(_row['free_flow_time'])
+                # Prefer free_flow_time; fall back to length/free_speed.
+                _t_raw = _row.get('free_flow_time')
+                if _t_raw:
+                    _t = float(_t_raw)
+                else:
+                    _t = float(_row['length']) / float(_row['free_speed']) * 60.0
             except (ValueError, TypeError, KeyError):
                 continue
             if _t > 0:

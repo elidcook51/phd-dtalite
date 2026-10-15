@@ -263,14 +263,16 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
     # is distinguishable from a real link.
     data = np.arange(1, len(link_lengths) + 1)
 
-
-
+    # Baltimore has parallel links (duplicate from/to node pairs).
+    # csr_matrix SUMS duplicate entries, corrupting the 1-based index
+    # (the sum can exceed n_links -> IndexError, or silently return the
+    # wrong link's length). Deduplicate, keeping the first occurrence.
+    _pairs = np.column_stack([np.asarray(row_idx), np.asarray(col_idx)])
+    _, _uniq = np.unique(_pairs, axis=0, return_index=True)
+    _uniq = np.sort(_uniq)
     link_lookup = csr_matrix(
-
-        (data, (row_idx, col_idx)),
-
-        shape = (max_node+1, max_node+1)
-
+        (data[_uniq], (np.asarray(row_idx)[_uniq], np.asarray(col_idx)[_uniq])),
+        shape=(max_node + 1, max_node + 1)
     )
 
 
@@ -1200,14 +1202,16 @@ def fixedcomassignment(
     # is distinguishable from a real link.
     data = np.arange(1, len(length_data) + 1)
 
-
-
+    # Baltimore has parallel links (duplicate from/to node pairs).
+    # csr_matrix SUMS duplicate entries, corrupting the 1-based index
+    # (the sum can exceed n_links -> IndexError, or silently return the
+    # wrong link's length). Deduplicate, keeping the first occurrence.
+    _pairs = np.column_stack([np.asarray(row_idx), np.asarray(col_idx)])
+    _, _uniq = np.unique(_pairs, axis=0, return_index=True)
+    _uniq = np.sort(_uniq)
     link_lookup = csr_matrix(
-
-        (data, (row_idx, col_idx)),
-
-        shape = (max_node+1, max_node+1)
-
+        (data[_uniq], (np.asarray(row_idx)[_uniq], np.asarray(col_idx)[_uniq])),
+        shape=(max_node + 1, max_node + 1)
     )
 
 

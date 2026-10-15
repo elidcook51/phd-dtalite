@@ -53,8 +53,7 @@ DTALITE_SUPPORT_FILES = [
     "DTASettings.txt",
     "input_link_type.csv",
     "input_node_control_type.csv",
-    "input_movement.csv",
-    "input_activity_location.csv",
+    "input_movement.csv",  # header-only in Sioux Falls; safe to copy
     "input_scenario_settings.csv",
     "input_demand.csv",
     "input_demand_type.csv",
@@ -222,6 +221,29 @@ def main():
         for z in sorted(zones):
             w.writerow([z, ""])
     log("  zones: %d" % len(zones))
+
+    # Build Baltimore-compatible input_activity_location.csv (zone -> node).
+    # The Sioux Falls version references wrong node IDs; DTALite validates
+    # these, so we generate from the Baltimore node file instead.
+    log("  building input_activity_location.csv ...")
+    zone_node = {}
+    with open(os.path.join(src, "input_node.csv"), newline="",
+              encoding="utf-8-sig") as fh:
+        for row in csv.DictReader(fh):
+            try:
+                z = int(float(row["zone_id"]))
+                n = int(float(row["node_id"]))
+            except (ValueError, KeyError):
+                continue
+            if z > 0 and z not in zone_node:
+                zone_node[z] = n
+    with open(os.path.join(out, "input_activity_location.csv"), "w",
+              newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["zone_id", "node_id", "external_OD_flag"])
+        for z in sorted(zone_node):
+            w.writerow([z, zone_node[z], ""])
+    log("  activity locations: %d" % len(zone_node))
 
     # ---- 3. choice sets (.mat v7.3 -> pickle) ---------------------------
     log("\n[3/6] choice sets ...")
