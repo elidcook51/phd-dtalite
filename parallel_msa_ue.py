@@ -209,7 +209,8 @@ def _sandbox_cwd(run_dir):
 
 def msa_parallel_ue(bigloop, p, p_fix, p_realtime, ue_routes_path,
                     run_id=None, repo_root=None, keep_on_failure=True,
-                    cleanup=True, msa_fn=None, seed=1):
+                    cleanup=True, msa_fn=None, seed=1,
+                    network='siouxfalls'):
     """
     Parallel-safe version of ``msa_ue.msa_ue`` (UE-guidance MSA).
 
@@ -258,7 +259,7 @@ def msa_parallel_ue(bigloop, p, p_fix, p_realtime, ue_routes_path,
                 msa_fn(bigloop, p, p_fix, p_realtime, _ue_path)
             else:
                 _msa_mod.msa_ue(bigloop, p, p_fix, p_realtime, _ue_path,
-                                seed=seed)
+                                seed=seed, network=network)
 
         copied = collect_results(run_dir, bigloop, dest_dir=dest_dir)
     except Exception:
@@ -580,7 +581,8 @@ def _run_batch(task_list, max_workers, repo_root, msa_fn, seed,
 
 def run_parallel_msa_ue(schedule, ue_routes_path, max_workers=None,
                         repo_root=None, keep_on_failure=True, msa_fn=None,
-                        seed=1, max_retries=MAX_RETRIES):
+                        seed=1, network='siouxfalls',
+                        max_retries=MAX_RETRIES):
     """
     Run many UE-guidance MSA iterations concurrently, one sandbox
     (``RunX/``) per iteration.
@@ -641,6 +643,7 @@ def run_parallel_msa_ue(schedule, ue_routes_path, max_workers=None,
             "cleanup": False,  # orchestrator deletes only on full success
             "msa_fn": msa_fn,
             "seed": seed,
+            "network": network,
         }
 
     schedule_tuples = list(schedule)

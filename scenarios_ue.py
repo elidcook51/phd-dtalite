@@ -63,6 +63,7 @@ Usage:
 """
 
 import argparse
+import csv
 import os
 import shutil
 import subprocess
@@ -70,6 +71,7 @@ import sys
 import time
 from pathlib import Path
 
+import netconfig
 import numpy as np
 import pandas as pd
 import scipy.io as sio
@@ -126,6 +128,29 @@ def find_header_row(raw, required=("init", "term"), scan=15):
         if all(r in joined for r in required):
             return i
     return None
+
+
+def load_network_baltimore(path, log):
+    """Baltimore: input_link.csv -> {(u, v): free-flow minutes}."""
+    freeflow = {}
+    n_skipped = 0
+    with open(path, newline="", encoding="utf-8-sig") as fh:
+        for row in csv.DictReader(fh):
+            try:
+                u = int(float(row["from_node_id"]))
+                v = int(float(row["to_node_id"]))
+                fft = float(row["free_flow_time"])
+            except (ValueError, TypeError, KeyError):
+                n_skipped += 1
+                continue
+            if fft <= 0 or (u, v) in freeflow:
+                n_skipped += 1
+                continue
+            freeflow[(u, v)] = fft
+    if n_skipped:
+        log("warning: %d link rows skipped" % n_skipped)
+    log("network: %d links" % len(freeflow))
+    return freeflow
 
 
 def load_network(path, log):
@@ -214,6 +239,33 @@ def unwrap_cell(value):
     return None
 
 
+def load_choiceset_baltimore(path, log):
+    """Baltimore: choice_sets.pkl -> (od_lookup, od_routes).
+
+    Same contract as load_choiceset, but ODs are zones (mirrors the
+    MATLAB od_path_map keyed by (origin_zone, dest_zone)).
+    """
+    import pickle as _pickle
+    with open(path, "rb") as fh:
+        choice_dict = _pickle.load(fh)
+    od_lookup = {}
+    od_routes = []
+    for oz, dz in sorted(choice_dict.keys()):
+        routes = []
+        for nodes in choice_dict[(oz, dz)]:
+            nodes = [int(x) for x in nodes]
+            if len(nodes) >= 2:
+                routes.append(nodes)
+        if routes:
+            od_lookup[(oz, dz)] = len(od_routes)
+            od_routes.append(routes)
+    if not od_routes:
+        raise UEError("no valid routes found in %s" % path)
+    log("choiceset: %d OD pairs, %d total routes"
+        % (len(od_routes), sum(len(r) for r in od_routes)))
+    return od_lookup, od_routes
+
+
 def load_choiceset(path, log):
     mat = sio.loadmat(path)
     if "finallist" not in mat:
@@ -263,8 +315,13 @@ def detect_columns(df, log):
 
     agent_col = find("agent_id")
     # Prefer node IDs over zone IDs: the choice set is node-based.
-    origin_col = find("from_origin_node_id") or find("from_zone_id") or find("origin")
-    dest_col = (find("to_destination_node_id") or find("to_zone_id")
+    if netconfig.is_baltimore():
+        origin_col = find("from_zone_id") or find("origin")
+        dest_col = (find("to_zone_id")
+                    or find("destination"))
+    else:
+        origin_col = find("from_origin_node_id") or find("from_zone_id") or find("origin")
+        dest_col = (find("to_destination_node_id") or find("to_zone_id")
                 or find("destination", exclude=("origin",)))
     path_col = find("path_node_sequence")
     dep_col = find("departure")  # optional; detected but not required
@@ -480,6 +537,9 @@ def main(argv=None):
                         help="writable sandbox copy of the DTALite inputs; REQUIRED")
     parser.add_argument("--result-dir", default=str(script_dir / "results" / "ue_baseline"))
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--network", default="siouxfalls",
+                        choices=["siouxfalls", "baltimore"],
+                        help="network: siouxfalls (default) or baltimore")
     parser.add_argument("--max-iters", type=int, default=50)
     parser.add_argument("--gap-threshold", type=float, default=0.0001)
     parser.add_argument("--choice-mat", default=None)
@@ -491,6 +551,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not args.data_dir:
         parser.error("--data-dir is required: pass a writable sandbox copy of the DTALite inputs (DTALite_Files/ is read-only)")
+
+    netconfig.configure(args.network)
 
     data_dir = Path(args.data_dir)
     result_dir = Path(args.result_dir)
@@ -514,11 +576,20 @@ def main(argv=None):
 
 
 def _run(args, data_dir, result_dir, log, t_start):
-    mat_path = args.choice_mat or str(data_dir / "choice set no overlap try.mat")
     dem_path = args.demand_csv or str(data_dir / "input_agent_initial.csv")
+    if netconfig.is_baltimore():
+        cs_path = args.choice_mat or str(data_dir / "choice_sets.pkl")
+        od_lookup, od_routes = load_choiceset_baltimore(cs_path, log)
+        cs_check = ("choice set", cs_path)
+    else:
+        mat_path = args.choice_mat or str(data_dir / "choice set no overlap try.mat")
+        od_lookup, od_routes = load_choiceset(mat_path, log)
+        cs_check = ("choice set", mat_path)
     net_path = args.network_xlsx or str(data_dir / "SiouxFalls_net.xlsx")
-    for label, path in (("choice set", mat_path), ("demand", dem_path),
-                        ("network", net_path)):
+    _checks = [cs_check, ("demand", dem_path)]
+    if not netconfig.is_baltimore():
+        _checks.append(("network", net_path))
+    for label, path in _checks:
         if not Path(path).is_file():
             raise UEError("%s not found: %s" % (label, path))
 
@@ -528,8 +599,9 @@ def _run(args, data_dir, result_dir, log, t_start):
     log("seed=%d, max_iters=%d, gap_threshold=%.6f, timeout=%ds"
         % (args.seed, args.max_iters, args.gap_threshold, args.timeout))
 
-    freeflow = load_network(net_path, log)
-    od_lookup, od_routes = load_choiceset(mat_path, log)
+    freeflow = (load_network_baltimore(str(data_dir / "input_link.csv"), log)
+                if netconfig.is_baltimore()
+                else load_network(net_path, log))
     od_linkpairs = [[[(r[k], r[k + 1]) for k in range(len(r) - 1)] for r in routes]
                     for routes in od_routes]
 

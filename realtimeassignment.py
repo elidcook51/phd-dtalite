@@ -1,5 +1,7 @@
 import numpy as np
 import pandas as pd
+
+import netconfig
 from scipy.io import savemat
 from traveltimecal import (
     traveltimecal,
@@ -49,6 +51,7 @@ def _dict_to_dense(d, shape):
 
 def comrealtimeassignment(
     itr,
+    outer_itr,
     choiceset,
     routelocation,
     phlength,
@@ -97,7 +100,8 @@ def comrealtimeassignment(
     agent_dep_all = pd.to_numeric(
         S.iloc[:, 6], errors="coerce"
     ).to_numpy(dtype=float)
-    agent_od_all = S.iloc[:, [4, 5]].to_numpy(dtype=float)
+    _oc = netconfig.OD_COLS
+    agent_od_all = S.iloc[:, [_oc[0], _oc[1]]].to_numpy(dtype=float)
 
     # Observed travel times from the previous DTALite run, row-aligned with
     # the input table (DTALite preserves input row order).
@@ -106,7 +110,7 @@ def comrealtimeassignment(
     # comrealtimeassignment.m:115 exactly: find(strcmp(path,agentpath)).
     # MATLAB then filters by floor(INPUT departure)==k+359 (line 142).
     grouped_observations = {}
-    if itr != 1:
+    if outer_itr != 1:
         T = pd.read_csv("DTALite_Files/output_agent.csv")
         n_rows = min(len(S), len(T))
         # MATLAB: agent_tt = T{:,13} (travel time), agentpath = T{:,30}.
@@ -129,23 +133,33 @@ def comrealtimeassignment(
     # TD-link table
     # (MATLAB: 'Each iteration.csv' on itr==1 else 'output_LinkTDMOE.csv')
     # --------------------------------------------------
-    td_file = (
-        "DTALite_Files/Each iteration.csv"
-        if itr == 1
-        else "DTALite_Files/output_LinkTDMOE.csv"
-    )
-    TDlink = pd.read_csv(
-        td_file, usecols=[0, 1, 4, 5], nrows=num_tdlink_rows
-    ).to_numpy(dtype=float)
+    if netconfig.is_baltimore() and outer_itr == 1:
+        # Free-flow seed (see assignment.py): empty TDlink table.
+        TDlink = np.empty((0, 4))
+    else:
+        td_file = (
+            "DTALite_Files/Each iteration.csv"
+            if outer_itr == 1
+            else "DTALite_Files/output_LinkTDMOE.csv"
+        )
+        TDlink = pd.read_csv(
+            td_file, usecols=[0, 1, 4, 5], nrows=num_tdlink_rows
+        ).to_numpy(dtype=float)
     b = TDlink[:, 0].copy()
 
     # --------------------------------------------------
     # Link table (MATLAB: xlsread('SiouxFalls_net',1,'B90:E165'))
     # --------------------------------------------------
-    length = pd.read_excel(
-        "DTALite_Files/SiouxFalls_net.xlsx", sheet_name=0,
-        usecols="B:E", skiprows=89, nrows=76, header=None,
-    ).to_numpy(dtype=float)
+    if netconfig.is_baltimore():
+        length = pd.read_csv(
+            "DTALite_Files/input_link.csv",
+            usecols=["from_node_id", "to_node_id", "length", "free_speed"],
+        ).to_numpy(dtype=float)
+    else:
+        length = pd.read_excel(
+            "DTALite_Files/SiouxFalls_net.xlsx", sheet_name=0,
+            usecols="B:E", skiprows=89, nrows=76, header=None,
+        ).to_numpy(dtype=float)
 
     link_len = {}
     for row in length:
@@ -202,7 +216,7 @@ def comrealtimeassignment(
 
     # Single time step, like MATLAB's `for k=itr*phlength:itr*phlength`.
     period_key = int(itr * phlength)
-    timestamp = period_key + 359
+    timestamp = period_key + netconfig.PERIOD_BASE
 
     # --------------------------------------------------
     # Route travel time / planning time / fuel cost
@@ -219,7 +233,7 @@ def comrealtimeassignment(
             path = choiceset[od_idx, route_idx]
 
             observed = None
-            if itr != 1:
+            if outer_itr != 1:
                 # MATLAB: agents on this exact (raw string) path departing at
                 # floor(departure) == (k+359); tt = mean, pltt = max.
                 cands = grouped_observations.get(str(path).strip())
@@ -250,11 +264,11 @@ def comrealtimeassignment(
 
     # --------------------------------------------------
     # Agents departing in this phase
-    # (MATLAB: (360+phlength*(itr-1), 360+phlength*itr])
+    # (MATLAB: (TIME_START+phlength*(itr-1), TIME_START+phlength*itr])
     # --------------------------------------------------
     period_mask = (
-        (agent_dep_all > 360.0 + phlength * (itr - 1))
-        & (agent_dep_all <= 360.0 + phlength * itr)
+        (agent_dep_all > netconfig.TIME_START + phlength * (itr - 1))
+        & (agent_dep_all <= netconfig.TIME_START + phlength * itr)
     )
     p_idx = np.where(period_mask)[0]
     p_agent = np.column_stack([agent_id_all[p_idx], agent_dep_all[p_idx]])
@@ -391,6 +405,7 @@ def comrealtimeassignment(
 
 def realtimeassignment_fast(
     itr,
+    outer_itr,
     choiceset,
     routelocation,
     phlength,
@@ -407,7 +422,11 @@ def realtimeassignment_fast(
     Parameters
     ----------
     itr : int
-        Current assignment iteration.
+        Current phase sub-iteration (1..phase); selects the departure
+        window within the hour.
+    outer_itr : int
+        Outer MSA iteration. Gates reads of previous-iteration DTALite
+        outputs (output_agent.csv, TD-link tables).
 
     choiceset : array-like, shape (n_od_pairs, n_routes)
         Transposed convention (same as comrealtimeassignment and
@@ -533,16 +552,17 @@ def realtimeassignment_fast(
 
     n_ods, n_routes = choiceset.shape
     period_key = int(itr * phlength)
-    td_departure_time = period_key + 359
+    td_departure_time = period_key + netconfig.PERIOD_BASE
     gas = 3.0
 
     # ---------------------------------------------------------
     # Read initial agent information
     # ---------------------------------------------------------
 
+    _oc2 = netconfig.OD_COLS
     agent_df = pd.read_csv(
         "DTALite_Files/input_agent_initial.csv",
-        usecols=[0, 4, 5, 6],
+        usecols=[0, _oc2[0], _oc2[1], 6],
     )
 
     # Preserve the same information as the original matrices.
@@ -561,7 +581,7 @@ def realtimeassignment_fast(
 
     path_observations = {}
 
-    if itr != 1:
+    if outer_itr != 1:
         output_agent_df = pd.read_csv(
             "DTALite_Files/output_agent.csv",
             usecols=[0, 9, 12, 29],
@@ -634,18 +654,22 @@ def realtimeassignment_fast(
     # Read current TD-link information
     # ---------------------------------------------------------
 
-    if itr == 1:
-        td_file = "DTALite_Files/Each iteration.csv"
+    if netconfig.is_baltimore() and outer_itr == 1:
+        # Free-flow seed (see comrealtimeassignment): empty TDlink table.
+        TDlink = np.empty((0, 4))
     else:
-        td_file = "DTALite_Files/output_LinkTDMOE.csv"
+        if outer_itr == 1:
+            td_file = "DTALite_Files/Each iteration.csv"
+        else:
+            td_file = "DTALite_Files/output_LinkTDMOE.csv"
 
-    td_df = pd.read_csv(
-        td_file,
-        usecols=[0, 1, 4, 5],
-        nrows=num_tdlink_rows,
-    )
+        td_df = pd.read_csv(
+            td_file,
+            usecols=[0, 1, 4, 5],
+            nrows=num_tdlink_rows,
+        )
 
-    TDlink = td_df.to_numpy(dtype=float)
+        TDlink = td_df.to_numpy(dtype=float)
     b = TDlink[:, 0].copy()
 
     # TDlink columns after selecting [0, 1, 4, 5]:
@@ -841,8 +865,8 @@ def realtimeassignment_fast(
     # Select agents departing in the current period
     # ---------------------------------------------------------
 
-    period_start = 360.0 + phlength * (itr - 1)
-    period_end = 360.0 + phlength * itr
+    period_start = netconfig.TIME_START + phlength * (itr - 1)
+    period_end = netconfig.TIME_START + phlength * itr
 
     period_mask = (
         (agent[:, 1] > period_start)

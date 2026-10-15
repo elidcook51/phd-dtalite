@@ -178,6 +178,27 @@ def read_users(xlsx_path):
     return prefs
 
 
+def read_users_csv(data_dir):
+    """Baltimore: agent_weights.csv -> {agent_id: pref}.
+
+    Same contract as read_users: 1-based preference id per agent.
+    """
+    import csv as _csv
+    path = os.path.join(data_dir, "agent_weights.csv")
+    if not os.path.isfile(path):
+        fail("agent_weights.csv not found: %s" % path)
+    prefs = {}
+    with open(path, newline="", encoding="utf-8-sig") as fh:
+        for row in _csv.DictReader(fh):
+            try:
+                prefs[int(float(row["agent_id"]))] = int(float(row["pref"]))
+            except (TypeError, ValueError, KeyError):
+                fail("bad row in agent_weights.csv: %r" % (row,))
+    if not prefs:
+        fail("no agents in agent_weights.csv")
+    return prefs
+
+
 def read_realweights(xlsx_path):
     """TRUE preference weights: sheet 'weights' cols J:O, skiprows=5.
 
@@ -269,6 +290,36 @@ def parse_nodes(path):
 
 def normalize_path(nodes):
     return ";".join(str(n) for n in nodes) + ";"
+
+
+def read_choice_set_baltimore(data_dir):
+    """Baltimore: choice_sets.pkl -> (routelocation, od_routes).
+
+    Same contract as read_choice_set, but ODs are zones (mirrors the
+    MATLAB od_path_map keyed by (origin_zone, dest_zone)).
+    """
+    import pickle as _pickle
+    path = os.path.join(data_dir, "choice_sets.pkl")
+    if not os.path.isfile(path):
+        fail("choice-set file not found: %s" % path)
+    with open(path, "rb") as fh:
+        choice_dict = _pickle.load(fh)
+    rl_rows = []
+    od_routes = {}
+    for od_idx, (oz, dz) in enumerate(sorted(choice_dict.keys())):
+        routes = {}
+        for r, nodes in enumerate(choice_dict[(oz, dz)]):
+            nodes = [int(n) for n in nodes]
+            if not nodes:
+                continue
+            routes[r] = nodes
+            rl_rows.append([float(oz), float(dz), 1.0, float(r),
+                            float(od_idx)])
+        if routes:
+            od_routes[od_idx] = routes
+    if not rl_rows:
+        fail("no routes in %s" % path)
+    return np.asarray(rl_rows, dtype=float), od_routes
 
 
 def read_choice_set(data_dir):
@@ -476,11 +527,15 @@ def read_agent_template(data_dir):
                 "departure_time_in_min", "path_node_sequence"):
         if col not in names:
             fail("column '%s' missing from %s" % (col, path))
-    i_from = names.index("from_origin_node_id")
-    i_to = names.index("to_destination_node_id")
-    if (i_from, i_to) != (4, 5):
-        fail("OD columns of %s are at positions %d,%d, not v9's 4,5"
-             % (path, i_from, i_to))
+    if netconfig.is_baltimore():
+        i_from = names.index("from_zone_id")
+        i_to = names.index("to_zone_id")
+    else:
+        i_from = names.index("from_origin_node_id")
+        i_to = names.index("to_destination_node_id")
+        if (i_from, i_to) != (4, 5):
+            fail("OD columns of %s are at positions %d,%d, not v9's 4,5"
+                 % (path, i_from, i_to))
     id_col = names.index("agent_id")
     dep_col = names.index("departure_time_in_min")
     path_col = names.index("path_node_sequence")
@@ -765,6 +820,9 @@ def parse_args(argv):
     # writable sandbox copy. No default on purpose -- see the guard below.
     p.add_argument("--data-dir", default=None,
                    help="writable sandbox copy of the DTALite inputs; REQUIRED")
+    p.add_argument("--network", default="siouxfalls",
+                   choices=["siouxfalls", "baltimore"],
+                   help="network: siouxfalls (default) or baltimore")
     p.add_argument("--result-dir", required=True,
                    help="output directory for actual_routes.csv and "
                         "reaction_summary.txt")
@@ -807,15 +865,20 @@ def main(argv=None):
     log_lines.append("guidance : %s" % args.guidance_csv)
     log_lines.append("data dir : %s" % data_dir)
 
+    import netconfig as _nc
+    _nc.configure(args.network)
     xlsx = os.path.join(data_dir, NETWORK_XLSX)
     print("loading network, users, weights ...")
     link_info = read_network(xlsx)
-    prefs = read_users(xlsx)
+    prefs = (read_users_csv(data_dir) if _nc.is_baltimore()
+             else read_users(xlsx))
     realweights = read_realweights(xlsx)
     meanstd2 = read_meanstd2(xlsx)
     meanstd28 = read_meanstd28(xlsx)
     print("loading choice set ...")
-    routelocation, od_routes = read_choice_set(data_dir)
+    routelocation, od_routes = (read_choice_set_baltimore(data_dir)
+                                 if _nc.is_baltimore()
+                                 else read_choice_set(data_dir))
     print("loading link travel times ...")
     # From the GUIDANCE run's outputs: read before the reaction run
     # overwrites the DTALite output files.

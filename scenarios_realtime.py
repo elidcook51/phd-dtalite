@@ -96,6 +96,7 @@ import shutil
 import subprocess
 import sys
 
+import netconfig
 import numpy as np
 import pandas as pd
 import openpyxl
@@ -696,6 +697,12 @@ def parse_args(argv=None):
         help="random seed (accepted for API parity with scenarios_ue.py; "
              "this script is fully deterministic and ignores it)",
     )
+    parser.add_argument(
+        "--network",
+        default="siouxfalls",
+        choices=["siouxfalls", "baltimore"],
+        help="network: siouxfalls (default) or baltimore",
+    )
     args = parser.parse_args(argv)
     if not args.data_dir:
         parser.error("--data-dir is required: pass a writable sandbox copy of the DTALite inputs (DTALite_Files/ is read-only)")
@@ -704,6 +711,7 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+    netconfig.configure(args.network)
     sigma = args.sigma
     data_dir = args.data_dir
     result_dir = args.result_dir or "results_realtime_%dmin" % sigma
