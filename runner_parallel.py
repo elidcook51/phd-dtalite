@@ -81,6 +81,10 @@ def main():
         help="Bigloops to run: e.g. '10' (Test 1, 100%% MPR only), "
              "'0-10' (full MPR sweep, Test 5), '5,10'. Default: '0-10'.",
     )
+    parser.add_argument(
+        "--network", default="siouxfalls", choices=["siouxfalls", "baltimore"],
+        help="Network: siouxfalls (default) or baltimore.",
+    )
     args = parser.parse_args()
 
     try:
@@ -115,6 +119,7 @@ def main():
         repo_root=repo_root,
         keep_on_failure=not args.no_keep_on_failure,
         seed=args.seed,
+        network=args.network,
     )
     elapsed = time.time() - start
 

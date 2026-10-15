@@ -590,7 +590,7 @@ def scripts_for_sweep(sub):
 # ----------------------------------------------------------------------
 # Per-test command lines
 # ----------------------------------------------------------------------
-def test1_commands(sandbox, seed, test1_mode="single"):
+def test1_commands(sandbox, seed, test1_mode="single", network="siouxfalls"):
     """Test 1 command lines.
 
     test1_mode="single": bigloop 10 only (100% MPR, the Test 1 case).
@@ -598,7 +598,7 @@ def test1_commands(sandbox, seed, test1_mode="single"):
                          new runs should use --tests 5).
     """
     cmd = [PY, os.path.join(sandbox, "runner_parallel.py"),
-           "--seed", str(seed)]
+           "--seed", str(seed), "--network", network]
     if test1_mode == "single":
         cmd += ["--bigloops", "10"]
         desc = "v9 pipeline (runner_parallel.py --bigloops 10)"
@@ -608,7 +608,7 @@ def test1_commands(sandbox, seed, test1_mode="single"):
     return [(cmd, desc)]
 
 
-def test24_commands(test, sandbox, seed):
+def test24_commands(test, sandbox, seed, network="siouxfalls"):
     """Guidance scenario followed by the preference-reaction step."""
     staging = os.path.join(sandbox, "staging")
     os.makedirs(staging, exist_ok=True)
@@ -619,13 +619,13 @@ def test24_commands(test, sandbox, seed):
         scenario = [PY, os.path.join(sandbox, "scenarios_realtime.py"),
                     "--sigma", str(cfg["sigma"]),
                     "--data-dir", data, "--result-dir", staging,
-                    "--seed", str(seed)]
+                    "--seed", str(seed), "--network", network]
         scenario_desc = "real-time sigma=%d (guidance)" % cfg["sigma"]
         guidance_csv = os.path.join(staging, "realtime_routes.csv")
     else:  # test 4
         scenario = [PY, os.path.join(sandbox, "scenarios_ue.py"),
                     "--data-dir", data, "--result-dir", staging,
-                    "--seed", str(seed)]
+                    "--seed", str(seed), "--network", network]
         scenario_desc = "UE baseline (MSA guidance)"
         guidance_csv = os.path.join(staging, "ue_routes.csv")
 
@@ -633,23 +633,26 @@ def test24_commands(test, sandbox, seed):
                 "--guidance-csv", guidance_csv,
                 "--data-dir", data,
                 "--result-dir", staging,
-                "--target-satisfaction", str(cfg["target"])]
+                "--target-satisfaction", str(cfg["target"]),
+                "--network", network]
     return [(scenario, scenario_desc),
             (reaction, "preference reaction")]
 
 
-def test5_commands(sub, sandbox, seed, ue_routes_path=None):
+def test5_commands(sub, sandbox, seed, ue_routes_path=None, network="siouxfalls"):
     """One [(cmd, desc)] entry per Test 5 sweep. sub is "P" or "U"."""
     if sub == "P":
         cmd = [PY, os.path.join(sandbox, "runner_parallel.py"),
-               "--bigloops", "0-10", "--seed", str(seed)]
+               "--bigloops", "0-10", "--seed", str(seed),
+               "--network", network]
         desc = "v9 pipeline (runner_parallel.py --bigloops 0-10, proposed MPR sweep)"
     else:
         if not ue_routes_path:
             raise ValueError("ue_routes_path is required for the UE-guidance sweep")
         cmd = [PY, os.path.join(sandbox, "runner_parallel_ue.py"),
                "--ue-routes", ue_routes_path,
-               "--bigloops", "1-10", "--seed", str(seed)]
+               "--bigloops", "1-10", "--seed", str(seed),
+               "--network", network]
         desc = "UE-guidance MPR sweep (runner_parallel_ue.py --bigloops 1-10)"
     return [(cmd, desc)]
 
@@ -857,23 +860,25 @@ def _run_commands(label, sandbox, cmds, tracker, key, parse_line):
         log("%s: finished (%s)" % (label, fmt_min(dt)))
     return True, dt
 
-def run_test(test, sandbox, tracker=None, seed=42, test1_mode="single"):
+def run_test(test, sandbox, tracker=None, seed=42, test1_mode="single",
+           network="siouxfalls"):
     """Run one test's command sequence inside its sandbox. Returns
     (ok, elapsed)."""
     cfg = TESTS[test]
     if test == 1:
-        cmds = test1_commands(sandbox, seed, test1_mode)
+        cmds = test1_commands(sandbox, seed, test1_mode, network)
     else:
-        cmds = test24_commands(test, sandbox, seed)
+        cmds = test24_commands(test, sandbox, seed, network)
     return _run_commands(cfg["label"], sandbox, cmds, tracker, test,
                          lambda i, line: parse_progress_line(test, i, line, tracker))
 
 
-def run_sweep(sub, sandbox, tracker, seed, ue_routes_path=None):
+def run_sweep(sub, sandbox, tracker, seed, ue_routes_path=None,
+            network="siouxfalls"):
     """Run one Test 5 sweep (sub "P"/"U"). Returns (ok, elapsed)."""
     key = "5" + sub
     label = "Test 5 (%s)" % TESTS[5]["subs"][sub]["label"]
-    cmds = test5_commands(sub, sandbox, seed, ue_routes_path)
+    cmds = test5_commands(sub, sandbox, seed, ue_routes_path, network)
     return _run_commands(label, sandbox, cmds, tracker, key,
                          lambda i, line: parse_progress_line(key, i, line, tracker))
 
@@ -1283,6 +1288,10 @@ def parse_args(argv=None):
     ap.add_argument("--data-dir", default="DTALite_Files",
                     help="read-only DTALite_Files source (default: "
                          "DTALite_Files)")
+    ap.add_argument("--network", default="siouxfalls",
+                    choices=["siouxfalls", "baltimore"],
+                    help="network: siouxfalls (default) or baltimore "
+                         "(use with --data-dir baltimore_files)")
     ap.add_argument("--results-dir", default="results",
                     help="output root (default: results)")
     ap.add_argument("--keep-temp", action="store_true",
@@ -1389,7 +1398,7 @@ def main(argv=None):
                 ue_routes_pre = None
             else:
                 _ok_dep4, _dt_dep4 = run_test(4, _sb_dep4, None, args.seed,
-                                              "single")
+                                              "single", args.network)
                 if _ok_dep4:
                     try:
                         collect_234(4, _sb_dep4, results_root)
@@ -1565,7 +1574,7 @@ def main(argv=None):
             log("Test 5: starting UE sweep (5U) -- ue_routes.csv ready")
             _f5u = ex.submit(
                 run_sweep, "U", sb5u, tracker, args.seed,
-                os.path.join(sb5u, "ue_routes.csv"))
+                os.path.join(sb5u, "ue_routes.csv"), args.network)
             futures[_f5u] = ("sweep", "5U")
             log("Test 5: 5U sweep submitted to executor")
 
@@ -1644,11 +1653,11 @@ def main(argv=None):
             for t in tests:
                 if t in (1, 2, 3, 4):
                     fut = ex.submit(run_test, t, sandboxes[t], tracker,
-                                    args.seed, args.test1_mode)
+                                    args.seed, args.test1_mode, args.network)
                     futures[fut] = ("test", t)
             if 5 in tests:
                 fut = ex.submit(run_sweep, "P", sandboxes["5P"], tracker,
-                                args.seed)
+                                args.seed, None, args.network)
                 futures[fut] = ("sweep", "5P")
             # 5U sandbox was set up in Phase A setup (if ue_routes.csv
             # was pre-resolved). Submit it here, into the shared dict.
@@ -1657,7 +1666,8 @@ def main(argv=None):
                 sweep_5u_started = True
                 _fut5u = ex.submit(
                     run_sweep, "U", sandboxes["5U"], tracker, args.seed,
-                    os.path.join(sandboxes["5U"], "ue_routes.csv"))
+                    os.path.join(sandboxes["5U"], "ue_routes.csv"),
+                    args.network)
                 futures[_fut5u] = ("sweep", "5U")
                 log("Test 5: 5U sweep submitted to executor")
 

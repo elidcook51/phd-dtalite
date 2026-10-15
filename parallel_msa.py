@@ -250,7 +250,7 @@ def _sandbox_cwd(run_dir):
 
 def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
                  repo_root=None, keep_on_failure=True, cleanup=True,
-                 msa_fn=None, seed=1):
+                 msa_fn=None, seed=1, network='siouxfalls'):
     """
     Parallel-safe version of ``msa.msa``.
 
@@ -289,7 +289,8 @@ def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
             if msa_fn is not None:
                 msa_fn(bigloop, p, p_fix, p_realtime)
             else:
-                _msa_mod.msa(bigloop, p, p_fix, p_realtime, seed=seed)
+                _msa_mod.msa(bigloop, p, p_fix, p_realtime, seed=seed,
+                             network=network)
 
         copied = collect_results(run_dir, bigloop, dest_dir=dest_dir)
     except Exception:
@@ -673,6 +674,7 @@ def _run_batch(task_list, max_workers, repo_root, msa_fn, seed,
 
 def run_parallel_msa(schedule, max_workers=None, repo_root=None,
                      keep_on_failure=True, msa_fn=None, seed=1,
+                     network='siouxfalls',
                      max_retries=MAX_RETRIES):
     """
     Run many MSA iterations concurrently, one sandbox (``RunX/``) per
@@ -743,6 +745,7 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
             "cleanup": False,  # orchestrator deletes only on full success
             "msa_fn": msa_fn,
             "seed": seed,
+            "network": network,
         }
 
     schedule_tuples = list(schedule)

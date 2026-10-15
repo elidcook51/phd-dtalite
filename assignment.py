@@ -1,5 +1,7 @@
 import numpy as np
 import warnings
+
+import netconfig
 # Suppress the divide-by-zero RuntimeWarning in the member utility tournament
 # (assignment.py bscale computation). meanstd2's std row has a zero at index 3;
 # MATLAB does the same division silently and gets Inf too -- behavior matches.
@@ -59,7 +61,7 @@ def sanitize_dtalite_csv(path):
 
     """
 
-    with open(path, newline="") as f:
+    with open(path, newline="", encoding="utf-8", errors="replace") as f:
 
         rows = list(csv.reader(f))
 
@@ -157,13 +159,18 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-        agentOD = np.column_stack([
+        if netconfig.is_baltimore():
+            # Zone-based OD matching (mirrors the MATLAB od_path_map).
+            _oc = netconfig.OD_COLS
+            agentOD = np.column_stack([S.iloc[:, _oc[0]], S.iloc[:, _oc[1]]])
+        else:
+            agentOD = np.column_stack([
 
-            S.iloc[:, 4],
+                S.iloc[:, 4],
 
-            S.iloc[:,5]
+                S.iloc[:,5]
 
-        ])
+            ])
 
 
 
@@ -171,7 +178,14 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-        TDlink_table = pd.read_csv('DTALite_Files/Each iteration.csv')
+        if netconfig.is_baltimore():
+            # Free-flow seed: traveltimecal falls back to length/speed
+            # for any (timestamp, from, to) missing from the map, so an
+            # empty table is exactly the free-flow seed.
+            TDlink = np.empty((0, 4))
+            TDlink_table = None
+        else:
+            TDlink_table = pd.read_csv('DTALite_Files/Each iteration.csv')
 
 
 
@@ -201,13 +215,19 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-        agentOD = np.column_stack([
+        if netconfig.is_baltimore():
+            # output_agent.csv zone columns are DTALite-version-specific;
+            # the OD is iteration-invariant, so take it from the input.
+            _oc = netconfig.OD_COLS
+            agentOD = np.array([[_r[_oc[0]], _r[_oc[1]]] for _r in inputagent])
+        else:
+            agentOD = np.column_stack([
 
-            T.iloc[:,7],
+                T.iloc[:,7],
 
-            T.iloc[:,8]
+                T.iloc[:,8]
 
-        ])
+            ])
 
 
 
@@ -215,11 +235,17 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-    TDlink = TDlink_table.iloc[:, [0,1,4,5]].to_numpy()
+    if TDlink_table is not None:
+        TDlink = TDlink_table.iloc[:, [0,1,4,5]].to_numpy()
 
 
 
-    link_lengths = pd.read_excel('DTALite_Files/SiouxFalls_net.xlsx', sheet_name = 0, usecols = 'B:E', skiprows = 89, nrows = 76, header = None).to_numpy()
+    if netconfig.is_baltimore():
+        _ldf = pd.read_csv('DTALite_Files/input_link.csv',
+                         usecols=['from_node_id', 'to_node_id', 'length', 'free_speed'])
+        link_lengths = _ldf.to_numpy()
+    else:
+        link_lengths = pd.read_excel('DTALite_Files/SiouxFalls_net.xlsx', sheet_name = 0, usecols = 'B:E', skiprows = 89, nrows = 76, header = None).to_numpy()
 
 
 
@@ -438,7 +464,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
             for k in range(60):
 
-                dep_time = k + 360  # MATLAB: (k+359) with k = 1..60
+                dep_time = k + netconfig.TIME_START  # MATLAB: (k+359) with k = 1..60
 
 
 
@@ -586,7 +612,7 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
-        po = int(np.floor(agent[i, 1]) - 359)
+        po = int(np.floor(agent[i, 1]) - netconfig.PERIOD_BASE)
 
 
 
@@ -899,6 +925,8 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
             subitr,
 
+            itr,
+
             choiceset,
 
             routelocation,
@@ -1100,7 +1128,9 @@ def fixedcomassignment(
 
 
 
-    if itr == 1:
+    if netconfig.is_baltimore() and itr == 1:
+        df = None  # free-flow seed
+    elif itr == 1:
 
         df = pd.read_csv("DTALite_Files/Each iteration.csv")
 
@@ -1112,17 +1142,20 @@ def fixedcomassignment(
 
 
 
-    TDlink = np.column_stack([
+    if df is None:
+        TDlink = np.empty((0, 4))
+    else:
+        TDlink = np.column_stack([
 
-        df.iloc[:num_tdlink_rows, 0],   # from node
+            df.iloc[:num_tdlink_rows, 0],   # from node
 
-        df.iloc[:num_tdlink_rows, 1],   # to node
+            df.iloc[:num_tdlink_rows, 1],   # to node
 
-        df.iloc[:num_tdlink_rows, 4],   # timestamp
+            df.iloc[:num_tdlink_rows, 4],   # timestamp
 
-        df.iloc[:num_tdlink_rows, 5],   # travel time
+            df.iloc[:num_tdlink_rows, 5],   # travel time
 
-    ])
+        ])
 
 
 
@@ -1143,10 +1176,15 @@ def fixedcomassignment(
     # MATLAB reads the link table as xlsread('SiouxFalls_net',1,'B90:E165'):
     # (from_node, to_node, length, speed). The 4th column is required
     # by traveltimecal_fastv2.
-    length_data = pd.read_excel(
-        'DTALite_Files/SiouxFalls_net.xlsx', sheet_name = 0,
-        usecols = 'B:E', skiprows = 89, nrows = 76, header = None
-    ).to_numpy()
+    if netconfig.is_baltimore():
+        _ldf = pd.read_csv('DTALite_Files/input_link.csv',
+                         usecols=['from_node_id', 'to_node_id', 'length', 'free_speed'])
+        length_data = _ldf.to_numpy()
+    else:
+        length_data = pd.read_excel(
+            'DTALite_Files/SiouxFalls_net.xlsx', sheet_name = 0,
+            usecols = 'B:E', skiprows = 89, nrows = 76, header = None
+        ).to_numpy()
 
 
 
@@ -1338,7 +1376,7 @@ def fixedcomassignment(
 
 
 
-                dep_time = k + 360  # MATLAB: (k+359) with k=1..60
+                dep_time = k + netconfig.TIME_START  # MATLAB: (k+359) with k=1..60
 
 
 
@@ -1496,7 +1534,7 @@ def fixedcomassignment(
 
 
 
-            po = int(np.floor(agent[i, 1]) - 359)
+            po = int(np.floor(agent[i, 1]) - netconfig.PERIOD_BASE)
 
             po = max(1, min(po, 300))
 
@@ -1830,7 +1868,9 @@ def comassignment(
 
     # ------------------------------------------------------------------
 
-    if itr == 1:
+    if netconfig.is_baltimore() and itr == 1:
+        tdfile = None  # free-flow seed
+    elif itr == 1:
 
         tdfile = "DTALite_Files/Each iteration.csv"
 
@@ -1844,25 +1884,25 @@ def comassignment(
 
 
 
-    TD = pd.read_csv(tdfile)
+    TD = None if tdfile is None else pd.read_csv(tdfile)
 
 
 
-    TDlink = np.column_stack(
+    TDlink = (np.empty((0, 4)) if TD is None else np.column_stack(
 
-        [
+            [
 
-            TD.iloc[:num_tdlink_rows, 0],
+                TD.iloc[:num_tdlink_rows, 0],
 
-            TD.iloc[:num_tdlink_rows, 1],
+                TD.iloc[:num_tdlink_rows, 1],
 
-            TD.iloc[:num_tdlink_rows, 4],
+                TD.iloc[:num_tdlink_rows, 4],
 
-            TD.iloc[:num_tdlink_rows, 5],
+                TD.iloc[:num_tdlink_rows, 5],
 
-        ]
+            ]
 
-    )
+        ))
 
 
 
@@ -1881,10 +1921,15 @@ def comassignment(
     # MATLAB reads the link table as xlsread('SiouxFalls_net',1,'B90:E165'):
     # (from_node, to_node, length, speed). The 4th column is required
     # by traveltimecal_fastv2.
-    length_data = pd.read_excel(
-        'DTALite_Files/SiouxFalls_net.xlsx', sheet_name = 0,
-        usecols = 'B:E', skiprows = 89, nrows = 76, header = None
-    ).to_numpy()
+    if netconfig.is_baltimore():
+        _ldf = pd.read_csv('DTALite_Files/input_link.csv',
+                         usecols=['from_node_id', 'to_node_id', 'length', 'free_speed'])
+        length_data = _ldf.to_numpy()
+    else:
+        length_data = pd.read_excel(
+            'DTALite_Files/SiouxFalls_net.xlsx', sheet_name = 0,
+            usecols = 'B:E', skiprows = 89, nrows = 76, header = None
+        ).to_numpy()
 
 
 
@@ -2052,7 +2097,7 @@ def comassignment(
 
 
 
-                current_time = k + 360
+                current_time = k + netconfig.TIME_START
 
 
 
@@ -2204,7 +2249,7 @@ def comassignment(
 
 
 
-        po = int(np.floor(agent[i, 1]) - 359)
+        po = int(np.floor(agent[i, 1]) - netconfig.PERIOD_BASE)
 
         po = max(1, min(po, 300))
 
@@ -2482,11 +2527,11 @@ def comassignment(
 
 
 
-        p_agent = a0[a0[:, 0] <= (360 + phlength * subitr)]
+        p_agent = a0[a0[:, 0] <= (netconfig.TIME_START + phlength * subitr)]
 
         p_agent = p_agent[
 
-            (360 + phlength * (subitr - 1)) < p_agent[:, 0]
+            ((netconfig.TIME_START + phlength * (subitr - 1)) < p_agent[:, 0]) | ((subitr == 1) & (p_agent[:, 0] == netconfig.TIME_START))
 
         ]
 
@@ -2509,6 +2554,8 @@ def comassignment(
         ) = comrealtimeassignment(
 
             subitr,
+
+            itr,
 
             choiceset,
 

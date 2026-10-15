@@ -77,6 +77,8 @@ from scipy.io import loadmat, savemat
 import time
 import warnings
 
+import netconfig
+
 
 
 
@@ -409,7 +411,59 @@ def stringify_rprime_keys(rprime):
 
 
 
-def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
+def _baltimore_fallback_paths(missing_ods):
+    """Free-flow shortest node path for each missing (oz, dz).
+
+    missing_ods: iterable of (oz, dz, origin_node, dest_node).
+    Returns { (oz, dz): [nodes] }.  Dijkstra on free_flow_time from
+    input_link.csv; intrazonal (origin == dest) -> single-node path.
+    """
+    import csv as _csv
+    import heapq as _hq
+    adj = {}
+    with open('DTALite_Files/input_link.csv', newline='',
+              encoding='utf-8-sig') as _fh:
+        for _row in _csv.DictReader(_fh):
+            try:
+                _u = int(float(_row['from_node_id']))
+                _v = int(float(_row['to_node_id']))
+                _t = float(_row['free_flow_time'])
+            except (ValueError, TypeError, KeyError):
+                continue
+            if _t > 0:
+                adj.setdefault(_u, []).append((_v, _t))
+    out = {}
+    for _oz, _dz, _o, _d in missing_ods:
+        if _o == _d:
+            out[(_oz, _dz)] = [_o]
+            continue
+        _dist = {_o: 0.0}
+        _prev = {}
+        _pq = [(0.0, _o)]
+        _done = False
+        while _pq:
+            _du, _u = _hq.heappop(_pq)
+            if _u == _d:
+                _done = True
+                break
+            if _du > _dist.get(_u, float('inf')):
+                continue
+            for _v, _t in adj.get(_u, ()):
+                _nd = _du + _t
+                if _nd < _dist.get(_v, float('inf')):
+                    _dist[_v] = _nd
+                    _prev[_v] = _u
+                    _hq.heappush(_pq, (_nd, _v))
+        if _done:
+            _path = [_d]
+            while _path[-1] != _o:
+                _path.append(_prev[_path[-1]])
+            out[(_oz, _dz)] = _path[::-1]
+    return out
+
+
+def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1,
+           network='siouxfalls'):
     """
     UE-guidance variant of ``msa``: guided members receive UE routes from
     ``ue_routes.csv`` instead of the tournament-selected UO route.
@@ -437,6 +491,8 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
     diagnostic-only; the mismatch is acceptable.
     """
 
+    netconfig.configure(network)
+
     start_time = time.time()
 
 
@@ -453,7 +509,12 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
 
 
-    temp_tdlink = pd.read_csv('DTALite_Files/Each iteration.csv')
+    if netconfig.is_baltimore():
+        # Free-flow seed via the traveltimecal length/speed fallback
+        # (see msa.py); avoids a ~2GB per-minute CSV.
+        temp_tdlink = pd.DataFrame()
+    else:
+        temp_tdlink = pd.read_csv('DTALite_Files/Each iteration.csv')
 
     num_tdlink_rows = len(temp_tdlink)
 
@@ -467,49 +528,78 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
 
 
-    mat = loadmat('DTALite_Files/choice set no overlap try.mat', simplify_cells = True)
+    if netconfig.is_baltimore():
+        import pickle as _pickle
+        with open('DTALite_Files/choice_sets.pkl', 'rb') as _fh:
+            _choice_dict = _pickle.load(_fh)
+        _agent_ods = {}
+        for _ar in temp_agent_data.itertuples():
+            _oz = int(float(_ar.from_zone_id))
+            _dz = int(float(_ar.to_zone_id))
+            if (_oz, _dz) not in _choice_dict and (_oz, _dz) not in _agent_ods:
+                _agent_ods[(_oz, _dz)] = (int(float(_ar.from_origin_node_id)),
+                                          int(float(_ar.to_destination_node_id)))
+        if _agent_ods:
+            _fb = _baltimore_fallback_paths(
+                [(_oz, _dz, _o, _d) for (_oz, _dz), (_o, _d) in _agent_ods.items()])
+            for _od, _path in _fb.items():
+                _choice_dict[_od] = [_path]
+        _od_list = sorted(_choice_dict.keys())
+        _k_max = max(len(_v) for _v in _choice_dict.values())
+        choiceset = np.empty((len(_od_list), _k_max), dtype=object)
+        _rl = []
+        for _ri, (_oz, _dz) in enumerate(_od_list):
+            _paths = _choice_dict[(_oz, _dz)]
+            for _ci, _path in enumerate(_paths):
+                choiceset[_ri, _ci] = ';'.join(str(_n) for _n in _path)
+                _rl.append([_oz, _dz, 1, _ci, _ri])
+            for _ci in range(len(_paths), _k_max):
+                choiceset[_ri, _ci] = None
+        routelocation = np.array(_rl)
+    else:
+        mat = loadmat('DTALite_Files/choice set no overlap try.mat', simplify_cells = True)
 
 
 
-    choiceset = mat['finallist'].T
+        choiceset = mat['finallist'].T
 
 
 
-    routelocation = []
+        routelocation = []
 
 
 
-    for row_idx in range(choiceset.shape[0]):
+        for row_idx in range(choiceset.shape[0]):
 
-        for col_idx in range(choiceset.shape[1]):
-
-
-
-            route_string = choiceset[row_idx, col_idx]
+            for col_idx in range(choiceset.shape[1]):
 
 
 
-            if not isinstance(route_string, str):
-
-                continue
+                route_string = choiceset[row_idx, col_idx]
 
 
 
-            parts = route_string.strip(';').split(';')
+                if not isinstance(route_string, str):
+
+                    continue
 
 
 
-            o = float(parts[0])
-
-            d = float(parts[-1])
+                parts = route_string.strip(';').split(';')
 
 
 
-            routelocation.append([o,d,1,col_idx,row_idx])
+                o = float(parts[0])
+
+                d = float(parts[-1])
 
 
 
-    routelocation = np.array(routelocation)
+                routelocation.append([o,d,1,col_idx,row_idx])
+
+
+
+        routelocation = np.array(routelocation)
 
 
 
@@ -533,17 +623,26 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
 
 
 
-    user = pd.read_excel(
+    if netconfig.is_baltimore():
+        _wdf = pd.read_csv('DTALite_Files/agent_weights.csv')
+        _pref_by_agent = dict(zip(_wdf['agent_id'].astype(str),
+                                  _wdf['pref'].astype(int)))
+        user = np.array([
+            [int(_aid), _pref_by_agent.get(str(_aid), 1)]
+            for _aid in temp_agent_data['agent_id']
+        ], dtype=int)
+    else:
+        user = pd.read_excel(
 
-        'DTALite_Files/SiouxFalls_net.xlsx',
+            'DTALite_Files/SiouxFalls_net.xlsx',
 
-        sheet_name='users',
+            sheet_name='users',
 
-        usecols = 'A:B',
+            usecols = 'A:B',
 
-        nrows = dsize
+            nrows = dsize
 
-    ).values
+        ).values
 
 
 
@@ -965,7 +1064,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1):
                 for interval in range(60):
 
                     # MATLAB: j = 1..60, period = j + 359.
-                    period = interval + 360
+                    period = interval + netconfig.TIME_START
 
                     idx = np.where(
                         (bprime[:, 2] == period)
