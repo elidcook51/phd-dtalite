@@ -679,7 +679,7 @@ def test5_commands(sub, sandbox, seed, ue_routes_path=None, network="siouxfalls"
 #                 progress every few seconds in normal operation.)
 #   _RUN_ABS_S:   absolute backstop per _run_commands call.
 _RUN_POLL_S = 2.0
-_RUN_STALL_S = 30 * 60
+_RUN_STALL_S = 30 * 60  # overridden by --stall-timeout-min in main()
 _RUN_ABS_S = 18 * 3600
 
 
@@ -1306,6 +1306,9 @@ def parse_args(argv=None):
                     help="keep temp/run_<pid>/ sandboxes after success")
     ap.add_argument("--max-workers", type=int, default=None,
                     help="parallel workers (default: min(4, phase-A jobs))")
+    ap.add_argument("--stall-timeout-min", type=float, default=30,
+                    help="kill a test if no progress for this many minutes "
+                         "(default: 30; 0 disables)")
     ap.add_argument("--no-progress", action="store_true",
                     help="disable the live progress display")
     ap.add_argument("--seed", type=int, default=42,
@@ -1328,6 +1331,11 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+    global _RUN_STALL_S
+    if args.stall_timeout_min <= 0:
+        _RUN_STALL_S = float('inf')
+    else:
+        _RUN_STALL_S = args.stall_timeout_min * 60
 
     # Couple --network to data/results dirs: --network baltimore implies
     # --data-dir baltimore_files and --results-dir results_baltimore,
