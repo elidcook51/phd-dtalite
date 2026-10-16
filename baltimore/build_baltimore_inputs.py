@@ -362,8 +362,28 @@ def main():
                            _agent_input, _txt, count=1)
         else:
             _txt = _txt.rstrip("\n") + "\n" + _agent_input
+        # Halbert (WSC 2026) used 300-min TDMOE aggregation for the
+        # 297k-link Baltimore network. 1-min aggregation causes 45GB+
+        # memory blowup in DTALite. Use 300-min to match the published
+        # baseline.
+        import re as _re2
+        _txt = _re2.sub(
+            r"TDLinkMOE_aggregation_time_interval_in_min\s*=\s*\d+",
+            "TDLinkMOE_aggregation_time_interval_in_min=300",
+            _txt, count=1)
+        # Disable per-vehicle emission output (huge); not needed for MSA.
+        _txt = _re2.sub(
+            r"output_emission_data\s*=\s*\d+",
+            "output_emission_data=0",
+            _txt, count=1)
+        # Use 32 threads (Halbert) instead of 8.
+        _txt = _re2.sub(
+            r"max_number_of_threads_to_be_used\s*=\s*\d+",
+            "max_number_of_threads_to_be_used=32",
+            _txt, count=1)
         open(_dta, "w", encoding="utf-8").write(_txt)
         log("  patched DTASettings.txt [agent_input] to 1020-1080")
+        log("  patched DTASettings.txt: TDMOE=300min, emissions=0, threads=32")
 
     # input_demand_file_list.csv: the agent file's loading window must cover
     # Baltimore departures (1020-1080), not Sioux Falls (360-420).
