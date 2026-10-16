@@ -192,22 +192,17 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
     else:
 
         T = pd.read_csv('DTALite_Files/output_agent.csv', usecols=[0, 9, 12, 29])
-
-
-
+        # usecols gives 4 columns at positions 0-3 (orig cols 0,9,12,29)
         agent = np.column_stack([
-
             T.iloc[:,0],
-
-            T.iloc[:,9],
-
-            T.iloc[:,12]
+            T.iloc[:,1],
+            T.iloc[:,2]
 
         ])
 
 
 
-        agentpath = T.iloc[:,29].astype(str).tolist()
+        agentpath = T.iloc[:,3].astype(str).tolist()
 
 
 
