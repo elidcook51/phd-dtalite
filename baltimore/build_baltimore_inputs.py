@@ -338,10 +338,23 @@ def main():
         log("  WARNING: not found, skipped: " + dtalite_dir)
     else:
         n_copied = 0
+        # Files that should NOT be overwritten if already present
+        # (e.g., Halbert's Baltimore-specific versions).
+        PRESERVE_IF_EXISTS = {
+            "input_link_type.csv",
+            "input_node_control_type.csv",
+            "input_movement.csv",
+            "input_scenario_settings.csv",
+        }
         for fn in DTALITE_SUPPORT_FILES:
+            dest = os.path.join(out, fn)
+            if fn in PRESERVE_IF_EXISTS and os.path.isfile(dest):
+                log("  preserving existing: " + fn)
+                n_copied += 1
+                continue
             sp = os.path.join(dtalite_dir, fn)
             if os.path.isfile(sp):
-                shutil.copy2(sp, os.path.join(out, fn))
+                shutil.copy2(sp, dest)
                 n_copied += 1
             else:
                 log("  WARNING: not found, skipped: " + fn)

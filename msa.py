@@ -305,25 +305,33 @@ def _baltimore_fallback_paths(missing_ods):
     Returns { (oz, dz): [nodes] }.  Dijkstra on free_flow_time from
     input_link.csv; intrazonal (origin == dest) -> single-node path.
     """
-    import csv as _csv
     import heapq as _hq
-    adj = {}
-    with open('DTALite_Files/input_link.csv', newline='',
-              encoding='utf-8-sig') as _fh:
-        for _row in _csv.DictReader(_fh):
-            try:
-                _u = int(float(_row['from_node_id']))
-                _v = int(float(_row['to_node_id']))
-                # Prefer free_flow_time; fall back to length/free_speed.
-                _t_raw = _row.get('free_flow_time')
-                if _t_raw:
-                    _t = float(_t_raw)
-                else:
-                    _t = float(_row['length']) / float(_row['free_speed']) * 60.0
-            except (ValueError, TypeError, KeyError):
-                continue
-            if _t > 0:
-                adj.setdefault(_u, []).append((_v, _t))
+    # Use pandas for speed (297k rows); cache the adjacency dict per process.
+    global _baltimore_adj_cache
+    try:
+        _baltimore_adj_cache
+    except NameError:
+        _baltimore_adj_cache = None
+    if _baltimore_adj_cache is None:
+        _ldf = pd.read_csv('DTALite_Files/input_link.csv',
+                           usecols=['from_node_id', 'to_node_id',
+                                    'length', 'free_speed', 'free_flow_time'])
+        _ldf['from_node_id'] = _ldf['from_node_id'].astype(int)
+        _ldf['to_node_id'] = _ldf['to_node_id'].astype(int)
+        # Prefer free_flow_time; fall back to length/free_speed*60.
+        _ldf['ff'] = _ldf['free_flow_time']
+        _mask = _ldf['ff'].isna() | (_ldf['ff'] <= 0)
+        _ldf.loc[_mask, 'ff'] = (_ldf['length'] / _ldf['free_speed'] * 60.0)
+        _ldf = _ldf[_ldf['ff'] > 0]
+        adj = {}
+        for _u, _v, _t in zip(_ldf['from_node_id'].values,
+                              _ldf['to_node_id'].values,
+                              _ldf['ff'].values):
+            adj.setdefault(_u, []).append((_v, float(_t)))
+        _baltimore_adj_cache = adj
+        del _ldf
+    else:
+        adj = _baltimore_adj_cache
     out = {}
     for _oz, _dz, _o, _d in missing_ods:
         if _o == _d:
