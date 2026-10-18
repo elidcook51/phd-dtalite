@@ -129,6 +129,48 @@ def sanitize_dtalite_outputs():
 
 
 
+# Module-level cache for static route arrays (v27).
+# route_length, nc, and link_lookup depend only on the choice set and
+# network (not on iteration). Computing them takes ~13 min for Baltimore
+# (115k path string parses). Cache across assignment() calls.
+_static_route_cache = None
+_static_route_cache_key = None
+
+def _get_static_route_arrays(choiceset, row_idx, col_idx, link_lengths):
+    """Compute (link_lookup, route_length, nc) once, cache by shape."""
+    global _static_route_cache, _static_route_cache_key
+    key = (choiceset.shape, len(row_idx))
+    if _static_route_cache is not None and _static_route_cache_key == key:
+        return _static_route_cache
+    import numpy as np
+    link_lookup = {}
+    for _i, (_u, _v) in enumerate(zip(row_idx, col_idx)):
+        _key = (int(_u), int(_v))
+        if _key not in link_lookup:
+            link_lookup[_key] = _i + 1
+    nrows, ncols = choiceset.shape
+    route_length = np.zeros((nrows, ncols))
+    nc = np.zeros((nrows, ncols))
+    for col in range(ncols):
+        for i in range(nrows):
+            path = choiceset[i, col]
+            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "" or str(path).strip() == "[]":
+                continue
+            nodes = [int(x) for x in str(path).split(';') if x.strip()]
+            if len(nodes) < 2:
+                continue
+            total = 0.0
+            for n1, n2 in zip(nodes[:-1], nodes[1:]):
+                idx = link_lookup.get((n1, n2), 0)
+                if idx:
+                    total += link_lengths[idx - 1, 2]
+            route_length[i, col] = total
+            nc[i, col] = len(nodes) - 1
+    _static_route_cache = (link_lookup, route_length, nc)
+    _static_route_cache_key = key
+    return _static_route_cache
+
+
 def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2, member, fix_user, realtime_user, a0, inputagent, bigloop, dsize, num_tdlink_rows):
 
 
@@ -258,96 +300,12 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
     # O(1) per lookup vs csr_matrix scalar indexing overhead.
     # Keeps first occurrence for duplicate (from,to) pairs (Baltimore
     # parallel links); 0/missing = no link.
-    link_lookup = {}
-    for _i, (_u, _v) in enumerate(zip(row_idx, col_idx)):
-        _key = (int(_u), int(_v))
-        if _key not in link_lookup:
-            link_lookup[_key] = _i + 1
-
-
-
+    # v27: use cached static route arrays (computed once, not per iteration)
+    link_lookup, route_length, nc = _get_static_route_arrays(choiceset, row_idx, col_idx, link_lengths)
     used_od_pairs = np.unique(agentOD, axis = 0)
-
-
-
-    # MATLAB computes len/nc for ALL choiceset columns (assignment.m:77-78).
-    # The old used_columns optimization only kept the FIRST route column per
-    # OD, leaving route_length=0 for uncomputed routes -- min() then picked
-    # those zero-length routes (e.g. agent 1 got '10;17;16;' instead of
-    # '10;16;'). Compute for all columns like MATLAB.
     used_columns = np.arange(choiceset.shape[1])
-
-
-
     nrows = choiceset.shape[0]
-
     ncols = choiceset.shape[1]
-
-
-
-    route_length = np.zeros((nrows, ncols))
-
-    nc = np.zeros((nrows, ncols)) 
-
-
-
-    for col in used_columns:
-
-        for i in range(nrows):
-
-
-
-            path = choiceset[i, col]
-
-
-
-            if path is None or (isinstance(path, np.ndarray) and path.size == 0) or path == "" or str(path).strip() == "[]":
-
-                continue
-
-
-
-            nodes = [
-
-                int(x) for x in path.split(';') if x.strip()
-
-            ]
-
-
-
-            if len(nodes) < 2:
-
-                continue
-
-
-
-            for n1, n2 in zip(nodes[:-1], nodes[1:]):
-
-
-
-                if (
-
-                    0 < n1 <= max_node and
-
-                    0 < n2 <= max_node
-
-                ):
-
-                    link_idx = link_lookup.get((n1, n2), 0)
-
-
-
-                    if link_idx > 0:
-
-                        route_length[i, col] += (
-
-                            link_lengths[link_idx-1,2]
-
-                        )
-
-
-
-            nc[i, col] = len(nodes) - 1
 
 
 

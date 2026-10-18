@@ -273,6 +273,32 @@ def main():
             n, flag = zone_node[z]
             w.writerow([z, n, flag])
     log("  activity locations: %d" % len(zone_node))
+    # ---- 6c. Clear zone_id for non-centroid nodes --------------------
+    # DTALite (main_api.cpp) creates 2 virtual connector links for every
+    # node with zone_id >= 1. The source input_node.csv has ~66k nodes
+    # with zone_id set, causing 133k virtual links (430k total) and GBs
+    # of wasted memory. Keep zone_id only on the 405 centroid nodes.
+    _centroids = set(n for n, _flag in zone_node.values())
+    _node_path = os.path.join(out, "input_node.csv")
+    _rows = []
+    with open(_node_path, newline="", encoding="utf-8-sig") as _fh:
+        _reader = csv.DictReader(_fh)
+        _fields = _reader.fieldnames
+        for _row in _reader:
+            try:
+                _nid = int(float(_row["node_id"]))
+            except (ValueError, KeyError):
+                _rows.append(_row)
+                continue
+            if _nid not in _centroids:
+                if "zone_id" in _row:
+                    _row["zone_id"] = "0"
+            _rows.append(_row)
+    with open(_node_path, "w", newline="", encoding="utf-8") as _fh:
+        _w = csv.DictWriter(_fh, fieldnames=_fields)
+        _w.writeheader()
+        _w.writerows(_rows)
+    log("  cleared zone_id for non-centroid nodes (kept %d)" % len(_centroids))
 
     # ---- 3. choice sets (.mat v7.3 -> pickle) ---------------------------
     log("\n[3/6] choice sets ...")
@@ -373,9 +399,9 @@ def main():
     _halbert_settings = """[shortest_path]
 max_size_of_adjacent_links=20
 [simulation]
-planning_horizon=1440
-simulation_start_time_in_min=900
-simulation_end_time_in_min=1200
+planning_horizon=180
+simulation_start_time_in_min=1020
+simulation_end_time_in_min=1080
 number_of_seconds_per_interval=6
 use_point_queue_for_on_ramps=1
 use_point_queue_for_off_ramps=1

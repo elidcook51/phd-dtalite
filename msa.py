@@ -311,6 +311,50 @@ def _baltimore_fallback_paths(missing_ods):
         # Single-node placeholder path (origin only).
         out[(_oz, _dz)] = [_o]
     return out
+# Module-level cache for SiouxFalls_net.xlsx weights (v26).
+# Four pd.read_excel() calls each re-parse the entire xlsx via openpyxl
+# (~3 min each = 13 min total). Values are static; load once per process.
+_xlsx_weights_cache = None
+
+def _load_xlsx_weights():
+    """Load weights/realweights/meanstd28/meanstd2 from xlsx, cached."""
+    global _xlsx_weights_cache
+    if _xlsx_weights_cache is not None:
+        return _xlsx_weights_cache
+    weights = pd.read_excel(
+        'DTALite_Files/SiouxFalls_net.xlsx',
+        sheet_name='weights',
+        usecols='A:F',
+        skiprows=5,
+        header=None
+    ).values
+    realweights = pd.read_excel(
+        'DTALite_Files/SiouxFalls_net.xlsx',
+        sheet_name='weights',
+        usecols='J:O',
+        skiprows=5,
+        header=None
+    ).values
+    meanstd28 = pd.read_excel(
+        'DTALite_Files/SiouxFalls_net.xlsx',
+        sheet_name='weights',
+        usecols='A:E',
+        skiprows=0,
+        nrows=3,
+        header=None,
+    ).values
+    meanstd2 = pd.read_excel(
+        'DTALite_Files/SiouxFalls_net.xlsx',
+        sheet_name='weights',
+        usecols='H:L',
+        skiprows=0,
+        nrows=3,
+        header=None,
+    ).values
+    _xlsx_weights_cache = (weights, realweights, meanstd28, meanstd2)
+    return _xlsx_weights_cache
+
+
 def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
     netconfig.configure(network)
@@ -478,71 +522,7 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
 
 
-    weights = pd.read_excel(
-
-        'DTALite_Files/SiouxFalls_net.xlsx',
-
-        sheet_name='weights',
-
-        usecols = 'A:F',
-
-        skiprows = 5,
-
-        header = None
-
-    ).values
-
-
-
-    realweights = pd.read_excel(
-
-        'DTALite_Files/SiouxFalls_net.xlsx',
-
-        sheet_name='weights',
-
-        usecols = 'J:O',
-
-        skiprows = 5,
-
-        header = None
-
-    ).values
-
-
-
-    meanstd28 = pd.read_excel(
-
-        'DTALite_Files/SiouxFalls_net.xlsx',
-
-        sheet_name ='weights',
-
-        usecols = 'A:E',
-
-        skiprows = 0,
-
-        nrows = 3,
-
-        header = None,
-
-    ).values
-
-
-
-    meanstd2 = pd.read_excel(
-
-        'DTALite_Files/SiouxFalls_net.xlsx',
-
-        sheet_name = 'weights',
-
-        usecols = 'H:L',
-
-        skiprows = 0,
-
-        nrows = 3,
-
-        header = None,
-
-    ).values
+    weights, realweights, meanstd28, meanstd2 = _load_xlsx_weights()
 
 
 
