@@ -50,7 +50,8 @@ KB_LINK_IDS = [285974, 285975, 285976, 285977, 299079, 299080, 299081]
 # DTALite support files copied from the Sioux Falls folder (network-agnostic).
 DTALITE_SUPPORT_FILES = [
     "DTALite.exe",
-    "DTASettings.txt",
+    # DTASettings.txt is written directly (Halbert's Baltimore settings),
+    # not copied from Sioux Falls.
     "input_link_type.csv",
     "input_node_control_type.csv",
     "input_movement.csv",  # header-only in Sioux Falls; safe to copy
@@ -337,53 +338,88 @@ def main():
         log("  WARNING: not found, skipped: " + dtalite_dir)
     else:
         n_copied = 0
+        # Files that should NOT be overwritten if already present
+        # (e.g., Halbert's Baltimore-specific versions).
+        PRESERVE_IF_EXISTS = {
+            "input_link_type.csv",
+            "input_node_control_type.csv",
+            "input_movement.csv",
+            "input_scenario_settings.csv",
+        }
         for fn in DTALITE_SUPPORT_FILES:
+            dest = os.path.join(out, fn)
+            if fn in PRESERVE_IF_EXISTS and os.path.isfile(dest):
+                log("  preserving existing: " + fn)
+                n_copied += 1
+                continue
             sp = os.path.join(dtalite_dir, fn)
             if os.path.isfile(sp):
-                shutil.copy2(sp, os.path.join(out, fn))
+                shutil.copy2(sp, dest)
                 n_copied += 1
             else:
                 log("  WARNING: not found, skipped: " + fn)
         log("  copied %d/%d support files" % (n_copied,
                                              len(DTALITE_SUPPORT_FILES)))
 
-    # ---- 6b. DTASettings.txt: Baltimore demand window ------------------
-    # DTALite validates agent departure times against the demand loading
-    # window. Sioux Falls uses 360-420; Baltimore uses 1020-1080.
+    # ---- 6b. DTASettings.txt: Halbert's Baltimore settings -----------
+    # Write the full DTASettings.txt directly (do NOT copy from Sioux Falls).
+    # Based on Halbert et al. WSC 2026 Baltimore configuration:
+    # - 300-min TDMOE aggregation (not 1-min; avoids 45GB memory blowup)
+    # - emissions off (not needed for MSA)
+    # - 32 threads
+    # - 6-second simulation intervals
+    # Demand window 1020-1080 for Baltimore (vs Halbert's 900-1200).
     _dta = os.path.join(out, "DTASettings.txt")
-    if os.path.isfile(_dta):
-        _txt = open(_dta, encoding="utf-8").read()
-        _agent_input = ("[agent_input]\n"
-                        "demand_loading_start_time_in_min=1020\n"
-                        "demand_loading_end_time_in_min=1080\n")
-        if "[agent_input]" in _txt:
-            import re as _re
-            _txt = _re.sub(r"\[agent_input\][^\[]*",
-                           _agent_input, _txt, count=1)
-        else:
-            _txt = _txt.rstrip("\n") + "\n" + _agent_input
-        # Halbert (WSC 2026) used 300-min TDMOE aggregation for the
-        # 297k-link Baltimore network. 1-min aggregation causes 45GB+
-        # memory blowup in DTALite. Use 300-min to match the published
-        # baseline.
-        import re as _re2
-        _txt = _re2.sub(
-            r"TDLinkMOE_aggregation_time_interval_in_min\s*=\s*\d+",
-            "TDLinkMOE_aggregation_time_interval_in_min=300",
-            _txt, count=1)
-        # Disable per-vehicle emission output (huge); not needed for MSA.
-        _txt = _re2.sub(
-            r"output_emission_data\s*=\s*\d+",
-            "output_emission_data=0",
-            _txt, count=1)
-        # Use 32 threads (Halbert) instead of 8.
-        _txt = _re2.sub(
-            r"max_number_of_threads_to_be_used\s*=\s*\d+",
-            "max_number_of_threads_to_be_used=32",
-            _txt, count=1)
-        open(_dta, "w", encoding="utf-8").write(_txt)
-        log("  patched DTASettings.txt [agent_input] to 1020-1080")
-        log("  patched DTASettings.txt: TDMOE=300min, emissions=0, threads=32")
+    _halbert_settings = """[shortest_path]
+max_size_of_adjacent_links=20
+[simulation]
+planning_horizon=1440
+simulation_start_time_in_min=900
+simulation_end_time_in_min=1200
+number_of_seconds_per_interval=6
+use_point_queue_for_on_ramps=1
+use_point_queue_for_off_ramps=1
+default_saturation_flow_rate_in_vehphpl=1800.00
+demand_capcaity_scaling_factor= 1.00
+[assignment]
+agent_based_assignment=1
+number_of_iterations=1
+aggregation_time_interval_in_min=15
+convergency_relative_gap_threshold_percentage= 5.00
+travel_time_difference_for_switching_in_min= 1.00
+relative_travel_time_difference_in_percentage_for_switching_in_percentage=15.00
+use_link_travel_time_from_external_input=0
+use_link_travel_time_from_external_input_gain_factor= 0.50
+[output]
+TDLinkMOE_aggregation_time_interval_in_min=300
+time_dependent_RoutingPolicy_file=0
+time_dependent_ODMOE_file=0
+time_dependent_ODMOE_aggregation_time_interval=30
+[computation]
+max_number_of_threads_to_be_used=32
+max_number_of_threads_for_real_time_routing=1
+[emission]
+output_emission_data=0
+target_vehicle_id_for_output_second_by_second_emission_data=0
+[traveler_information]
+information_updating_interval_in_min=1
+[ABM_integration]
+RT_Input_Agent_Frequency_in_Seconds=0
+RT_Input_Routing_Policy_Frequency_in_Seconds=0
+RT_Output_LinkMOE_Frequency_in_Seconds=0
+RT_Output_TDODMOE_in_Seconds=0
+RT_Output_Complete_Agent_Frequency_in_Seconds=0
+RT_Output_Tagged_Agent_Frequency_in_Seconds=0
+dependency_agent_reading_percentage=0
+day_by_day_output=0
+day_by_day_output_starting_iteration=100
+[agent_input]
+demand_loading_start_time_in_min=1020
+demand_loading_end_time_in_min=1080
+"""
+    with open(_dta, "w", encoding="utf-8", newline="\n") as _fh:
+        _fh.write(_halbert_settings)
+    log("  wrote DTASettings.txt (Halbert Baltimore settings)")
 
     # input_demand_file_list.csv: the agent file's loading window must cover
     # Baltimore departures (1020-1080), not Sioux Falls (360-420).
