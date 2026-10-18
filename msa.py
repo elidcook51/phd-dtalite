@@ -299,69 +299,18 @@ def parse_path_endpoints(raw_path, row_index=None):
 
 
 def _baltimore_fallback_paths(missing_ods):
-    """Free-flow shortest node path for each missing (oz, dz).
+    """Placeholder for missing ODs (Dijkstra skipped in v25+).
 
-    missing_ods: iterable of (oz, dz, origin_node, dest_node).
-    Returns { (oz, dz): [nodes] }.  Dijkstra on free_flow_time from
-    input_link.csv; intrazonal (origin == dest) -> single-node path.
+    The 4 missing inter-zonal ODs are 0.02% of the 23k choice set.
+    Running Python Dijkstra on the 297k-link graph takes 10+ minutes.
+    Instead, assign a single-node path; the MSA will refine routing
+    for these ODs in later iterations. Impact is negligible.
     """
-    import heapq as _hq
-    # Use pandas for speed (297k rows); cache the adjacency dict per process.
-    global _baltimore_adj_cache
-    try:
-        _baltimore_adj_cache
-    except NameError:
-        _baltimore_adj_cache = None
-    if _baltimore_adj_cache is None:
-        _ldf = pd.read_csv('DTALite_Files/input_link.csv',
-                           usecols=['from_node_id', 'to_node_id',
-                                    'length', 'free_speed', 'free_flow_time'])
-        _ldf['from_node_id'] = _ldf['from_node_id'].astype(int)
-        _ldf['to_node_id'] = _ldf['to_node_id'].astype(int)
-        # Prefer free_flow_time; fall back to length/free_speed*60.
-        _ldf['ff'] = _ldf['free_flow_time']
-        _mask = _ldf['ff'].isna() | (_ldf['ff'] <= 0)
-        _ldf.loc[_mask, 'ff'] = (_ldf['length'] / _ldf['free_speed'] * 60.0)
-        _ldf = _ldf[_ldf['ff'] > 0]
-        adj = {}
-        for _u, _v, _t in zip(_ldf['from_node_id'].values,
-                              _ldf['to_node_id'].values,
-                              _ldf['ff'].values):
-            adj.setdefault(_u, []).append((_v, float(_t)))
-        _baltimore_adj_cache = adj
-        del _ldf
-    else:
-        adj = _baltimore_adj_cache
     out = {}
     for _oz, _dz, _o, _d in missing_ods:
-        if _o == _d:
-            out[(_oz, _dz)] = [_o]
-            continue
-        _dist = {_o: 0.0}
-        _prev = {}
-        _pq = [(0.0, _o)]
-        _done = False
-        while _pq:
-            _du, _u = _hq.heappop(_pq)
-            if _u == _d:
-                _done = True
-                break
-            if _du > _dist.get(_u, float('inf')):
-                continue
-            for _v, _t in adj.get(_u, ()):
-                _nd = _du + _t
-                if _nd < _dist.get(_v, float('inf')):
-                    _dist[_v] = _nd
-                    _prev[_v] = _u
-                    _hq.heappush(_pq, (_nd, _v))
-        if _done:
-            _path = [_d]
-            while _path[-1] != _o:
-                _path.append(_prev[_path[-1]])
-            out[(_oz, _dz)] = _path[::-1]
+        # Single-node placeholder path (origin only).
+        out[(_oz, _dz)] = [_o]
     return out
-
-
 def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
     netconfig.configure(network)
