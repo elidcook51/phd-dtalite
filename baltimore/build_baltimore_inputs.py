@@ -386,6 +386,16 @@ def main():
                 log("  WARNING: not found, skipped: " + fn)
         log("  copied %d/%d support files" % (n_copied,
                                              len(DTALITE_SUPPORT_FILES)))
+        # v29: sanitize input_link_type.csv encoding (permanent fix).
+        # Halbert's file contains a latin-1 0xa0 byte ("Principal arterial")
+        # which decodes to U+FFFD and crashes Python's cp1252 output.
+        _lt_path = os.path.join(out, "input_link_type.csv")
+        if os.path.isfile(_lt_path):
+            _raw = open(_lt_path, "rb").read()
+            _fixed = _raw.replace(b"\xa0", b" ").replace(b"\xef\xbf\xbd", b" ")
+            if _fixed != _raw:
+                open(_lt_path, "wb").write(_fixed)
+                log("  sanitized input_link_type.csv (encoding)")
 
     # ---- 6b. DTASettings.txt: Halbert's Baltimore settings -----------
     # Write the full DTASettings.txt directly (do NOT copy from Sioux Falls).
