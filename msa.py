@@ -414,10 +414,24 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
                 _agent_ods[(_oz, _dz)] = (int(float(_ar.from_origin_node_id)),
                                           int(float(_ar.to_destination_node_id)))
         if _agent_ods:
-            _fb = _baltimore_fallback_paths(
-                [(_oz, _dz, _o, _d) for (_oz, _dz), (_o, _d) in _agent_ods.items()])
-            for _od, _path in _fb.items():
-                _choice_dict[_od] = [_path]
+            # v30: DROP agents with missing ODs instead of placeholder paths.
+            # Placeholder single-node paths cause DTALite to drop 224 agents,
+            # leading to input/output row count mismatch (2000 vs 1776)
+            # and IndexError. Excluding them keeps counts consistent.
+            _missing_od_set = set(_agent_ods.keys())
+            _n_before = len(temp_agent_data)
+            _mask = temp_agent_data.apply(
+                lambda _r: (int(float(_r['from_zone_id'])),
+                           int(float(_r['to_zone_id']))) not in _missing_od_set,
+                axis=1)
+            temp_agent_data = temp_agent_data[_mask].reset_index(drop=True)
+            _n_dropped = _n_before - len(temp_agent_data)
+            if _n_dropped:
+                print(f"  [baltimore] dropped {_n_dropped} agents with "
+                      f"{len(_missing_od_set)} missing ODs", flush=True)
+            # Rebuild inputagent and dsize from the filtered data
+            inputagent = temp_agent_data.values.tolist()
+            dsize = len(inputagent)
         _od_list = sorted(_choice_dict.keys())
         _k_max = max(len(_v) for _v in _choice_dict.values())
         choiceset = np.empty((len(_od_list), _k_max), dtype=object)
