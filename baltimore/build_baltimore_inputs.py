@@ -456,7 +456,10 @@ demand_loading_end_time_in_min=1080
         for _r in _rows:
             _c = _r.split(",")
             if len(_c) > 8 and _c[2].strip() == "input_agent.csv":
-                _c[6], _c[7] = "1020", "1080"
+                # Columns: 6=subtotal_in_last_column, 7=start_time_in_min,
+                # 8=end_time_in_min. v28 fixes off-by-one (was writing to 6,7).
+                _c[6] = ""
+                _c[7], _c[8] = "1020", "1080"
                 _r = ",".join(_c)
             _out.append(_r)
         open(_dfl, "w", encoding="utf-8").write("\n".join(_out) + "\n")
