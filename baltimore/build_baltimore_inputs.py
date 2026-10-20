@@ -318,6 +318,24 @@ def main():
     missing = [od for od in od_needed if od not in choice]
     log("  agent ODs without a choice set: %d (of %d inter-zonal)"
         % (len(missing), len(od_needed)))
+    if missing:
+        # v31: DROP agents with missing ODs. DTALite cannot route them
+        # (no choice-set paths), drops them from output, causing
+        # input/output row count mismatch and Python IndexError.
+        _missing_set = set(missing)
+        _n_before = len(agent_rows)
+        agent_rows = [r for r in agent_rows
+                      if (int(float(r["from_zone_id"])),
+                          int(float(r["to_zone_id"]))) not in _missing_set]
+        _n_dropped = _n_before - len(agent_rows)
+        log("  v31: dropped %d agents with missing ODs (%d remain)"
+            % (_n_dropped, len(agent_rows)))
+        with open(os.path.join(out, "input_agent.csv"), "w", newline="",
+                  encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=cols)
+            w.writeheader()
+            w.writerows(agent_rows)
+        log("  rewrote input_agent.csv (%d rows)" % len(agent_rows))
 
     # ---- 4. per-agent preference weights -------------------------------
     log("\n[4/6] preference weights ...")
