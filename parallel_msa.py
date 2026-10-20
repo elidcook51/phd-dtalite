@@ -128,6 +128,26 @@ WORKER_WATCHDOG_S = 3300
 MAX_RETRIES = 1
 
 
+def _timeouts_for_network(network):
+    """Wall-clock budgets (per-bigloop, watchdog, absolute) in seconds.
+
+    The module constants above are sized for Sioux Falls (~40-45 min
+    per bigloop). A Baltimore bigloop runs 18 DTALite calls at
+    ~20 min each (~6 h), so it needs much larger budgets -- with the
+    Sioux Falls values the parent killed a healthy worker at 3006 s
+    during iteration 3 (run_46336, v34 fix).
+    """
+    if network == 'baltimore':
+        return 43200.0, 46800.0, 50400.0
+    return (float(PER_BIGLOOP_TIMEOUT_S), float(WORKER_WATCHDOG_S),
+            float(BIGLOOP_TIMEOUT_S))
+
+
+# Budgets for the batch currently running; run_parallel_msa() sets this
+# from the network before each batch. Defaults are the Sioux Falls ones.
+_ACTIVE_TIMEOUTS = _timeouts_for_network('siouxfalls')
+
+
 
 def _result_names(bigloop):
     """Per-iteration result files produced for a given ``bigloop``."""
@@ -455,11 +475,15 @@ def _worker_initializer():
     parent's per-bigloop timeout.
     """
     def _watchdog():
-        time.sleep(WORKER_WATCHDOG_S)
+        # Spawned workers re-import this module, so parent-set globals do
+        # not reach them; run_parallel_msa() passes the budget via env.
+        budget = float(os.environ.get('DTALITE_WORKER_WATCHDOG_S',
+                                      WORKER_WATCHDOG_S))
+        time.sleep(budget)
         try:
             sys.stderr.write(
                 "\nWORKER WATCHDOG: worker still alive after %ds; "
-                "it is stuck -- forcing os._exit(2)\n" % WORKER_WATCHDOG_S)
+                "it is stuck -- forcing os._exit(2)\n" % budget)
             sys.stderr.flush()
         except Exception:
             pass
@@ -639,9 +663,9 @@ def _run_batch(task_list, max_workers, repo_root, msa_fn, seed,
                     dyn_timeout = max(1800.0, 2.0 * median)
                 else:
                     dyn_timeout = float("inf")
-                timeout = min(float(PER_BIGLOOP_TIMEOUT_S),
+                timeout = min(_ACTIVE_TIMEOUTS[0],
                               dyn_timeout,
-                              float(BIGLOOP_TIMEOUT_S))
+                              _ACTIVE_TIMEOUTS[2])
                 # Check each pending task against its own elapsed time
                 timed_out = []
                 for future in pending:
@@ -652,7 +676,7 @@ def _run_batch(task_list, max_workers, repo_root, msa_fn, seed,
                     task_elapsed = _task_elapsed(task)
                     # Also enforce absolute batch timeout as backstop
                     batch_elapsed = now - submit_time
-                    if task_elapsed > timeout or batch_elapsed > float(BIGLOOP_TIMEOUT_S):
+                    if task_elapsed > timeout or batch_elapsed > _ACTIVE_TIMEOUTS[2]:
                         timed_out.append((future, bl, task_elapsed, timeout))
                 if timed_out:
                     for future, bl, task_elapsed, timeout in timed_out:
@@ -748,6 +772,9 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
     * The shared (non-iteration-tagged) result files are copied from the
       highest *successful* bigloop.
     """
+    global _ACTIVE_TIMEOUTS
+    _ACTIVE_TIMEOUTS = _timeouts_for_network(network)
+    os.environ['DTALITE_WORKER_WATCHDOG_S'] = str(int(_ACTIVE_TIMEOUTS[1]))
     repo_root = os.path.abspath(repo_root or os.getcwd())
     if not schedule:
         return SweepResults()
