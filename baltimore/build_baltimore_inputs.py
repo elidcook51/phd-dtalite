@@ -318,18 +318,34 @@ def main():
     missing = [od for od in od_needed if od not in choice]
     log("  agent ODs without a choice set: %d (of %d inter-zonal)"
         % (len(missing), len(od_needed)))
-    if missing:
-        # v31: DROP agents with missing ODs. DTALite cannot route them
-        # (no choice-set paths), drops them from output, causing
-        # input/output row count mismatch and Python IndexError.
-        _missing_set = set(missing)
-        _n_before = len(agent_rows)
-        agent_rows = [r for r in agent_rows
-                      if (int(float(r["from_zone_id"])),
-                          int(float(r["to_zone_id"]))) not in _missing_set]
-        _n_dropped = _n_before - len(agent_rows)
-        log("  v31: dropped %d agents with missing ODs (%d remain)"
-            % (_n_dropped, len(agent_rows)))
+    # v33: drop agents DTALite 2017 cannot route and silently discards:
+    # missing ODs (no choice-set paths) and intrazonal trips
+    # (from_zone == to_zone, single-node path). The dropped agents make
+    # DTALite's output row count smaller than the input count, which
+    # crashes Python with IndexError. Intrazonal trips traverse no
+    # network links, so excluding them does not change link MOEs.
+    _missing_set = set(missing)
+    _n_before = len(agent_rows)
+    _n_intra = 0
+    _kept = []
+    for r in agent_rows:
+        _oz = int(float(r["from_zone_id"]))
+        _dz = int(float(r["to_zone_id"]))
+        if _oz == _dz:
+            _n_intra += 1
+            continue
+        if (_oz, _dz) in _missing_set:
+            continue
+        _kept.append(r)
+    _n_missing_od = _n_before - _n_intra - len(_kept)
+    agent_rows = _kept
+    if _n_missing_od:
+        log("  v33: dropped %d agents with missing ODs (%d remain)"
+            % (_n_missing_od, len(agent_rows)))
+    if _n_intra:
+        log("  v33: dropped %d intrazonal agents (%d remain)"
+            % (_n_intra, len(agent_rows)))
+    if _n_missing_od or _n_intra:
         with open(os.path.join(out, "input_agent.csv"), "w", newline="",
                   encoding="utf-8") as fh:
             w = csv.DictWriter(fh, fieldnames=cols)

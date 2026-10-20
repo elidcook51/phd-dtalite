@@ -272,6 +272,21 @@ def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2
 
 
 
+    if netconfig.is_baltimore():
+        # v33 diagnostic guard (no logic change): DTALite 2017 silently
+        # drops unroutable agents, so for itr > 1 `agent` (built from
+        # output_agent.csv) can have fewer rows than dsize (built from
+        # the input). Indexing it with range(dsize) then crashes with an
+        # opaque IndexError ("index N is out of bounds"). Name the cause.
+        _n_agent_rows = int(np.asarray(agent).shape[0])
+        if _n_agent_rows != dsize:
+            raise RuntimeError(
+                "[baltimore] DTALite output has %d agents but input had "
+                "%d; %d agents were dropped (likely intrazonal or "
+                "unroutable paths). Converter should have excluded them; "
+                "re-run build_baltimore_inputs.py with v33 and retry."
+                % (_n_agent_rows, dsize, dsize - _n_agent_rows))
+
     if TDlink_table is not None:
         TDlink = TDlink_table.iloc[:, [0,1,4,5]].to_numpy()
 
