@@ -298,18 +298,88 @@ def parse_path_endpoints(raw_path, row_index=None):
 
 
 
-def _baltimore_fallback_paths(missing_ods):
-    """Placeholder for missing ODs (Dijkstra skipped in v25+).
+# Module-level cache for the Baltimore free-flow adjacency (v32).
+# Built once per process from input_link.csv with pandas; the earlier
+# concern about Dijkstra cost was really the csv-module load, and only
+# a handful of ODs need fallback paths anyway.
+_baltimore_adj_cache = None
 
-    The 4 missing inter-zonal ODs are 0.02% of the 23k choice set.
-    Running Python Dijkstra on the 297k-link graph takes 10+ minutes.
-    Instead, assign a single-node path; the MSA will refine routing
-    for these ODs in later iterations. Impact is negligible.
+def _baltimore_adjacency():
+    """Adjacency {from_node: [(to_node, free_flow_time_min), ...]}."""
+    global _baltimore_adj_cache
+    if _baltimore_adj_cache is not None:
+        return _baltimore_adj_cache
+    links = pd.read_csv('DTALite_Files/input_link.csv',
+                        usecols=lambda c: c in ('from_node_id', 'to_node_id',
+                                                'free_flow_time', 'length',
+                                                'free_speed'))
+    adj = {}
+    has_fft = 'free_flow_time' in links.columns
+    for _f, _t, _fft, _ln, _fs in zip(links['from_node_id'],
+                                      links['to_node_id'],
+                                      links['free_flow_time'] if has_fft else [None] * len(links),
+                                      links['length'],
+                                      links['free_speed']):
+        try:
+            _w = float(_fft)
+        except (TypeError, ValueError):
+            _w = float('nan')
+        if not (_w > 0):
+            # free-flow time from length (miles) / free_speed (mph) * 60
+            try:
+                _w = float(_ln) / float(_fs) * 60.0
+            except (TypeError, ValueError, ZeroDivisionError):
+                continue
+        if not (_w > 0):
+            continue
+        adj.setdefault(int(_f), []).append((int(_t), _w))
+    _baltimore_adj_cache = adj
+    return adj
+
+
+def _baltimore_fallback_paths(missing_ods):
+    """Free-flow shortest paths (Dijkstra) for ODs with no choice set.
+
+    Restored in v32: the v25 single-node placeholders made DTALite
+    silently drop those agents, desyncing input/output agent counts.
+    With the pandas-based adjacency build this runs in seconds for
+    the handful of missing ODs.
     """
+    import heapq
+    adj = _baltimore_adjacency()
     out = {}
     for _oz, _dz, _o, _d in missing_ods:
-        # Single-node placeholder path (origin only).
-        out[(_oz, _dz)] = [_o]
+        _o, _d = int(_o), int(_d)
+        if _o == _d:
+            out[(_oz, _dz)] = [_o]
+            continue
+        dist = {_o: 0.0}
+        prev = {}
+        pq = [(0.0, _o)]
+        found = False
+        while pq:
+            _du, _u = heapq.heappop(pq)
+            if _u == _d:
+                found = True
+                break
+            if _du > dist.get(_u, float('inf')):
+                continue
+            for _v, _w in adj.get(_u, ()):
+                _nd = _du + _w
+                if _nd < dist.get(_v, float('inf')):
+                    dist[_v] = _nd
+                    prev[_v] = _u
+                    heapq.heappush(pq, (_nd, _v))
+        if not found and _d not in prev:
+            # No free-flow path exists; leave a single-node path so the
+            # agent still appears (same last resort as before).
+            out[(_oz, _dz)] = [_o]
+            continue
+        path = [_d]
+        while path[-1] != _o:
+            path.append(prev[path[-1]])
+        path.reverse()
+        out[(_oz, _dz)] = path
     return out
 # Module-level cache for SiouxFalls_net.xlsx weights (v26).
 # Four pd.read_excel() calls each re-parse the entire xlsx via openpyxl
@@ -414,24 +484,14 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
                 _agent_ods[(_oz, _dz)] = (int(float(_ar.from_origin_node_id)),
                                           int(float(_ar.to_destination_node_id)))
         if _agent_ods:
-            # v30: DROP agents with missing ODs instead of placeholder paths.
-            # Placeholder single-node paths cause DTALite to drop 224 agents,
-            # leading to input/output row count mismatch (2000 vs 1776)
-            # and IndexError. Excluding them keeps counts consistent.
-            _missing_od_set = set(_agent_ods.keys())
-            _n_before = len(temp_agent_data)
-            _mask = temp_agent_data.apply(
-                lambda _r: (int(float(_r['from_zone_id'])),
-                           int(float(_r['to_zone_id']))) not in _missing_od_set,
-                axis=1)
-            temp_agent_data = temp_agent_data[_mask].reset_index(drop=True)
-            _n_dropped = _n_before - len(temp_agent_data)
-            if _n_dropped:
-                print(f"  [baltimore] dropped {_n_dropped} agents with "
-                      f"{len(_missing_od_set)} missing ODs", flush=True)
-            # Rebuild inputagent and dsize from the filtered data
-            inputagent = temp_agent_data.values.tolist()
-            dsize = len(inputagent)
+            # v32: real free-flow shortest paths for missing ODs
+            # (Dijkstra restored; see _baltimore_fallback_paths).
+            _fb = _baltimore_fallback_paths(
+                [(_oz, _dz, _o, _d) for (_oz, _dz), (_o, _d) in _agent_ods.items()])
+            for _od, _path in _fb.items():
+                _choice_dict[_od] = [_path]
+            print(f"  [baltimore] Dijkstra fallback paths for "
+                  f"{len(_fb)} missing ODs", flush=True)
         _od_list = sorted(_choice_dict.keys())
         _k_max = max(len(_v) for _v in _choice_dict.values())
         choiceset = np.empty((len(_od_list), _k_max), dtype=object)
