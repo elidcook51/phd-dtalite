@@ -8,10 +8,12 @@ import netconfig
 warnings.filterwarnings("ignore", category=RuntimeWarning,
                          message="divide by zero*")
 try:
-    from progress import dtalite_kwargs as _dtalite_kw, kill_dtalite_leftovers
+    from progress import dtalite_kwargs as _dtalite_kw, kill_dtalite_leftovers, dtalite_timeout as _dtalite_timeout
 except ImportError:
     def _dtalite_kw():
         return {}
+    def _dtalite_timeout():
+        return 900
 
 import pandas as pd
 
@@ -171,7 +173,20 @@ def _get_static_route_arrays(choiceset, row_idx, col_idx, link_lengths):
     return _static_route_cache
 
 
-def assignment(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2, member, fix_user, realtime_user, a0, inputagent, bigloop, dsize, num_tdlink_rows):
+def assignment(*args, **kwargs):
+    """Timing wrapper around _assignment_impl (v35 instrumentation).
+
+    Prints each call's duration so the DTALite-vs-Python split per
+    MSA iteration is visible in the run log. No logic change.
+    """
+    import time as _time
+    _t0 = _time.time()
+    _out = _assignment_impl(*args, **kwargs)
+    print(f"  [timing] assignment() took {_time.time() - _t0:.1f}s", flush=True)
+    return _out
+
+
+def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, meanstd2, member, fix_user, realtime_user, a0, inputagent, bigloop, dsize, num_tdlink_rows):
 
 
 
@@ -2709,7 +2724,7 @@ def comassignment(
         except subprocess.TimeoutExpired:
             kill_dtalite_leftovers()
             raise RuntimeError(
-                "DTALite.exe timed out after 900s in comassignment")
+                f"DTALite.exe timed out after {_dtalite_timeout()}s in comassignment")
 
         sanitize_dtalite_outputs()
 

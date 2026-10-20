@@ -54,7 +54,7 @@ import subprocess
 
 from assignment import assignment, comassignment, sanitize_dtalite_outputs
 try:
-    from progress import get_pbar, dtalite_kwargs, kill_dtalite_leftovers
+    from progress import get_pbar, dtalite_kwargs, kill_dtalite_leftovers, dtalite_timeout
     _HAS_PROGRESS = True
 except ImportError:
     _HAS_PROGRESS = False
@@ -67,6 +67,8 @@ except ImportError:
         return _D()
     def dtalite_kwargs():
         return {}
+    def dtalite_timeout():
+        return 900
 
 import numpy as np
 
@@ -1169,7 +1171,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1,
         except subprocess.TimeoutExpired:
             kill_dtalite_leftovers()
             raise RuntimeError(
-                f"DTALite.exe timed out after 900s (bigloop={bigloop}, itr={itr})")
+                f"DTALite.exe timed out after {dtalite_timeout()}s (bigloop={bigloop}, itr={itr})")
         _pbar.update(1)
 
         sanitize_dtalite_outputs()
@@ -1375,7 +1377,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1,
     except subprocess.TimeoutExpired:
         kill_dtalite_leftovers()
         raise RuntimeError(
-            f"DTALite.exe timed out after 900s (bigloop={bigloop}, phase=predict)")
+            f"DTALite.exe timed out after {dtalite_timeout()}s (bigloop={bigloop}, phase=predict)")
 
     sanitize_dtalite_outputs()
 
@@ -1500,7 +1502,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1,
     except subprocess.TimeoutExpired:
         kill_dtalite_leftovers()
         raise RuntimeError(
-            f"DTALite.exe timed out after 900s (bigloop={bigloop}, phase=actual)")
+            f"DTALite.exe timed out after {dtalite_timeout()}s (bigloop={bigloop}, phase=actual)")
 
     sanitize_dtalite_outputs()
 

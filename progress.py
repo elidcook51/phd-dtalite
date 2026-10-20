@@ -68,18 +68,38 @@ def get_pbar(bigloop, total=20, position=None):
     return _DummyBar(desc, total)
 
 
+def dtalite_timeout():
+    """Per-call DTALite timeout in seconds.
+
+    900 s is ample for Sioux Falls. A Baltimore call re-allocates
+    ~47 GB of link MOE arrays on a 430k-link network, and at full
+    demand a single call can legitimately exceed 900 s (Halbert's
+    full-demand iterations ran ~33 min end to end), so Baltimore
+    gets 3600 s. The timeout is only a hang guard; it does not
+    change any computation.
+    """
+    try:
+        import netconfig
+        if netconfig.is_baltimore():
+            return 3600
+    except Exception:
+        pass
+    return 900
+
+
 def dtalite_kwargs():
     """kwargs for subprocess.run to silence DTALite (unless overridden).
 
-    Includes stdin=DEVNULL (prevents hangs on stdin reads) and timeout=900
-    (prevents infinite hangs if DTALite stalls). Callers should wrap in
-    try/except subprocess.TimeoutExpired for clear error messages.
+    Includes stdin=DEVNULL (prevents hangs on stdin reads) and a
+    timeout (see dtalite_timeout; prevents infinite hangs if DTALite
+    stalls). Callers should wrap in try/except
+    subprocess.TimeoutExpired for clear error messages.
     """
     import subprocess
     if os.environ.get("DTALITE_VERBOSE") == "1":
-        return {"stdin": subprocess.DEVNULL, "timeout": 900}
+        return {"stdin": subprocess.DEVNULL, "timeout": dtalite_timeout()}
     return {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
-            "stdin": subprocess.DEVNULL, "timeout": 900}
+            "stdin": subprocess.DEVNULL, "timeout": dtalite_timeout()}
 
 
 def kill_dtalite_leftovers():
