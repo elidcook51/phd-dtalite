@@ -76,6 +76,7 @@ Python 3.9, stdlib + numpy + pandas + scipy (+ openpyxl for xlsx).
 
 import argparse
 import csv
+import netconfig
 import os
 import shutil
 import subprocess
@@ -482,9 +483,11 @@ def read_agent_observations(data_dir, od_routes):
         if not (np.isfinite(dep) and np.isfinite(tt)):
             fail("non-finite departure/travel time in %s" % path)
         ts = int(np.floor(dep))
-        if ts < 360 or ts > 419:
-            fail("departure %.2f min in %s outside the 360-419 window"
-                 % (dep, path))
+        win_lo = netconfig.TIME_START
+        win_hi = win_lo + netconfig.N_PERIODS - 1
+        if ts < win_lo or ts > win_hi:
+            fail("departure %.2f min in %s outside the %d-%d window"
+                 % (dep, path, win_lo, win_hi))
         nodes = parse_nodes(row[i_path])
         key = path_lookup.get(normalize_path(nodes)) if nodes else None
         if key is None:
@@ -980,9 +983,11 @@ def main(argv=None):
             continue
         dep = departures[aid]
         ts = int(np.floor(dep))
-        if ts < 360 or ts > 419:
-            fail("agent %d departs at %.2f min, outside the 360-419 "
-                 "information window" % (aid, dep))
+        win_lo = netconfig.TIME_START
+        win_hi = win_lo + netconfig.N_PERIODS - 1
+        if ts < win_lo or ts > win_hi:
+            fail("agent %d departs at %.2f min, outside the %d-%d "
+                 "information window" % (aid, dep, win_lo, win_hi))
         route_ids = sorted(routes.keys())
         winner = tournament(f, route_ids, wrow, dataset2, cache, routes,
                             meanstd2, ts,

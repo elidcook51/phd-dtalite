@@ -224,11 +224,14 @@ def read_choice_set_baltimore(data_dir):
             if len(nodes) < 2:
                 continue
             links = [(nodes[i], nodes[i+1]) for i in range(len(nodes)-1)]
-            # Key by node endpoints (like original read_choice_set),
-            # not zones — the agent lookup uses from_origin_node_id.
-            key = (float(nodes[0]), float(nodes[-1]))
+            # Key by zone OD (the pkl keys), matching the zone-based
+            # agent lookup in read_demand. Keying by path node
+            # endpoints merged different zone ODs that share
+            # endpoints and missed agents whose origin/destination
+            # node is not a path endpoint.
+            key = (float(oz), float(dz))
             out.setdefault(key, [])
-            # Avoid duplicate routes for the same node OD
+            # Avoid duplicate routes for the same zone OD
             if (nodes, links) not in out[key]:
                 out[key].append((nodes, links))
     return out
@@ -318,8 +321,14 @@ def read_demand(csv_path):
     """Read the agent template; fail fast on NaN agent ids / departures."""
     df = pd.read_csv(csv_path)
     agent_col = detect_column(df, ["agent_id"])
-    origin_col = detect_column(df, ["from_origin_node_id", "origin_node_id"])
-    dest_col = detect_column(df, ["to_destination_node_id", "destination_node_id"])
+    if netconfig.is_baltimore():
+        # Baltimore choice sets are keyed by zone OD (see
+        # read_choice_set_baltimore), so the agent OD is the zone pair.
+        origin_col = detect_column(df, ["from_zone_id"])
+        dest_col = detect_column(df, ["to_zone_id"])
+    else:
+        origin_col = detect_column(df, ["from_origin_node_id", "origin_node_id"])
+        dest_col = detect_column(df, ["to_destination_node_id", "destination_node_id"])
     dep_col = detect_column(df, ["departure_time_in_min", "departure_time"])
     path_col = detect_column(df, ["path_node_sequence"])
 

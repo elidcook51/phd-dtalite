@@ -339,6 +339,20 @@ def _baltimore_adjacency():
     return adj
 
 
+def stringify_rprime_keys(rprime):
+    """Convert rprime's (route, od, interval, itr) tuple keys to strings.
+
+    scipy's savemat silently writes [[None]] for dicts with non-string keys,
+    which would lose the whole per-route/OD/interval demand tensor; string
+    keys round-trip fine. Keys are 0-based (route, od, interval, itr).
+    """
+    return {
+        f"r{route:03d}_od{od:03d}_t{interval:02d}_itr{itr:02d}": count
+        for (route, od, interval, itr), count in rprime.items()
+    }
+
+
+
 def _baltimore_fallback_paths(missing_ods):
     """Free-flow shortest paths (Dijkstra) for ODs with no choice set.
 
@@ -453,10 +467,14 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
         # (timestamp, from, to) key is absent from the TDlink map, so an
         # empty table is exactly the free-flow seed (avoids a ~2GB CSV).
         temp_tdlink = pd.DataFrame()
+        # No seed row count to cap TD reads with: None makes every
+        # downstream TDLinkMOE read take the full table (its real row
+        # count). Capping at len(temp_tdlink) = 0 emptied them all and
+        # silently priced predict/actual/realtime routes at free-flow.
+        num_tdlink_rows = None
     else:
         temp_tdlink = pd.read_csv('DTALite_Files/Each iteration.csv')
-
-    num_tdlink_rows = len(temp_tdlink)
+        num_tdlink_rows = len(temp_tdlink)
 
 
 
@@ -926,7 +944,10 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
 
 
-        for j in list(member) + list(realtime_user):
+        # Fixed users are included: their tournament-chosen path has to
+        # be written too, or they simulate on the initial file's path
+        # every iteration (Baltimore's initial file has no paths).
+        for j in list(member) + list(realtime_user) + list(fix_user):
 
             # choice / final_rposition are the post-realtime OD and route
             # indices (transposed choiceset: [od_index, route_index]).
@@ -1049,11 +1070,14 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
 
 
-        dd = pd.read_csv('DTALite_Files/output_LinkTDMOE.csv')
+        # MATLAB reads output_LinkMOE.csv col 8 (total_link_volume, one row
+        # per link), not output_LinkTDMOE.csv col 8 (link x timestamp
+        # in-volume). Select the column by name, not position.
+        dd = pd.read_csv('DTALite_Files/output_LinkMOE.csv')
 
 
 
-        linkV.append(dd.iloc[:, 7].to_numpy())
+        linkV.append(dd['total_link_volume'].to_numpy())
 
 
 
@@ -1376,9 +1400,9 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
             'cc': cc,
 
-            'rprime': rprime,
+            'rprime': stringify_rprime_keys(rprime),
 
-            'linkV': np.array(linkV, dtype = object),
+            'linkV': np.column_stack(linkV),
 
             'choice': com_choice,
 

@@ -173,6 +173,17 @@ def _get_static_route_arrays(choiceset, row_idx, col_idx, link_lengths):
     return _static_route_cache
 
 
+def stringify_pathinfo_keys(d):
+    """Convert (route_row, route_col) tuple keys to strings for savemat.
+
+    scipy's savemat silently writes [[None]] for dicts with non-string
+    keys, which would lose the whole tt/pltt/fuelcost path-info tables;
+    string keys round-trip fine (same fix as msa.py's rprime).
+    """
+    return {f"row{row:05d}_col{col:02d}": values
+            for (row, col), values in d.items()}
+
+
 def assignment(*args, **kwargs):
     """Timing wrapper around _assignment_impl (v35 instrumentation).
 
@@ -248,18 +259,23 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
 
     else:
 
-        T = pd.read_csv('DTALite_Files/output_agent.csv', usecols=[0, 9, 12, 29])
-        # usecols gives 4 columns at positions 0-3 (orig cols 0,9,12,29)
+        T = pd.read_csv('DTALite_Files/output_agent.csv', usecols=[0, 7, 8, 9, 12, 29])
+        # usecols gives 6 columns at positions 0-5 (orig cols
+        # 0,7,8,9,12,29): agent_id, from/to node, departure time,
+        # travel time, path. Cols 7/8 must be loaded -- the Sioux
+        # Falls branch below reads the OD from them; the old
+        # 4-column read left T without cols 7/8 and crashed every
+        # Sioux Falls iteration >= 2.
         agent = np.column_stack([
             T.iloc[:,0],
-            T.iloc[:,1],
-            T.iloc[:,2]
+            T.iloc[:,3],
+            T.iloc[:,4]
 
         ])
 
 
 
-        agentpath = T.iloc[:,3].astype(str).tolist()
+        agentpath = T.iloc[:,5].astype(str).tolist()
 
 
 
@@ -275,9 +291,9 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
         else:
             agentOD = np.column_stack([
 
-                T.iloc[:,7],
+                T.iloc[:,1],
 
-                T.iloc[:,8]
+                T.iloc[:,2]
 
             ])
 
@@ -854,11 +870,11 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
 
                 'len': route_length,
 
-                'tt': tt,
+                'tt': stringify_pathinfo_keys(tt),
 
-                'pltt': pltt,
+                'pltt': stringify_pathinfo_keys(pltt),
 
-                'fuelcost': fuelcost,
+                'fuelcost': stringify_pathinfo_keys(fuelcost),
 
                 'nc': nc
 
@@ -1050,13 +1066,24 @@ def fixedcomassignment(
 
 
 
-        agentOD = np.column_stack([
+        if netconfig.is_baltimore():
+            # Zone-keyed choice sets: match on zone IDs, not nodes.
+            _oc = netconfig.OD_COLS
+            agentOD = np.column_stack([
 
-            S.iloc[:, 4],
+                S.iloc[:, _oc[0]],
 
-            S.iloc[:, 5]
+                S.iloc[:, _oc[1]]
 
-        ])
+            ])
+        else:
+            agentOD = np.column_stack([
+
+                S.iloc[:, 4],
+
+                S.iloc[:, 5]
+
+            ])
 
 
 
@@ -1088,13 +1115,25 @@ def fixedcomassignment(
 
 
 
-        agentOD = np.column_stack([
+        if netconfig.is_baltimore():
+            # Zone-keyed choice sets: the DTALite output layout
+            # carries the zone IDs at cols 5/6 (nodes at 7/8 never
+            # match a zone pair).
+            agentOD = np.column_stack([
 
-            T.iloc[:, 7],
+                T.iloc[:, 5],
 
-            T.iloc[:, 8]
+                T.iloc[:, 6]
 
-        ])
+            ])
+        else:
+            agentOD = np.column_stack([
+
+                T.iloc[:, 7],
+
+                T.iloc[:, 8]
+
+            ])
 
 
 
@@ -1763,11 +1802,21 @@ def comassignment(
 
 
 
-        agentOD = np.column_stack(
+        if netconfig.is_baltimore():
+            # Baltimore choice sets are keyed by zone; node IDs never
+            # match them, so the OD comes from the zone columns.
+            _oc = netconfig.OD_COLS
+            agentOD = np.column_stack(
 
-            [S.iloc[:, 4].to_numpy(), S.iloc[:, 5].to_numpy()]
+                [S.iloc[:, _oc[0]].to_numpy(), S.iloc[:, _oc[1]].to_numpy()]
 
-        )
+            )
+        else:
+            agentOD = np.column_stack(
+
+                [S.iloc[:, 4].to_numpy(), S.iloc[:, 5].to_numpy()]
+
+            )
 
 
 
@@ -1795,11 +1844,18 @@ def comassignment(
 
 
 
-        agentOD = np.column_stack(
+        if netconfig.is_baltimore():
+            # Zone OD from the input (iteration-invariant; mirrors
+            # _assignment_impl -- output zone columns are
+            # DTALite-version-specific, node cols never match).
+            _oc = netconfig.OD_COLS
+            agentOD = np.array([[_r[_oc[0]], _r[_oc[1]]] for _r in inputagent])
+        else:
+            agentOD = np.column_stack(
 
-            [T.iloc[:, 7].to_numpy(), T.iloc[:, 8].to_numpy()]
+                [T.iloc[:, 7].to_numpy(), T.iloc[:, 8].to_numpy()]
 
-        )
+            )
 
 
 
@@ -1827,11 +1883,18 @@ def comassignment(
 
 
 
-        agentOD = np.column_stack(
+        if netconfig.is_baltimore():
+            # Zone OD from the input (iteration-invariant; mirrors
+            # _assignment_impl -- output zone columns are
+            # DTALite-version-specific, node cols never match).
+            _oc = netconfig.OD_COLS
+            agentOD = np.array([[_r[_oc[0]], _r[_oc[1]]] for _r in inputagent])
+        else:
+            agentOD = np.column_stack(
 
-            [T.iloc[:, 7].to_numpy(), T.iloc[:, 8].to_numpy()]
+                [T.iloc[:, 7].to_numpy(), T.iloc[:, 8].to_numpy()]
 
-        )
+            )
 
 
 
@@ -2461,11 +2524,11 @@ def comassignment(
 
             "len": route_len,
 
-            "tt": tt,
+            "tt": stringify_pathinfo_keys(tt),
 
-            "pltt": pltt,
+            "pltt": stringify_pathinfo_keys(pltt),
 
-            "fuelcost": fuelcost,
+            "fuelcost": stringify_pathinfo_keys(fuelcost),
 
             "nc": nc,
 

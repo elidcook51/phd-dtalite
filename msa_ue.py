@@ -519,10 +519,14 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1,
         # Free-flow seed via the traveltimecal length/speed fallback
         # (see msa.py); avoids a ~2GB per-minute CSV.
         temp_tdlink = pd.DataFrame()
+        # No seed row count to cap TD reads with: None makes every
+        # downstream TDLinkMOE read take the full table. Capping at
+        # len(temp_tdlink) = 0 emptied them all and silently priced
+        # predict/actual/realtime routes at free-flow (see msa.py).
+        num_tdlink_rows = None
     else:
         temp_tdlink = pd.read_csv('DTALite_Files/Each iteration.csv')
-
-    num_tdlink_rows = len(temp_tdlink)
+        num_tdlink_rows = len(temp_tdlink)
 
 
 
@@ -1102,7 +1106,7 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1,
 
 
 
-        for j in range(dsize):  # MATLAB parity: msa.m writes all dsize agents
+        for j in member:
 
             # UE-guidance variant: guided members receive their UE
             # equilibrium route from ue_routes.csv instead of the

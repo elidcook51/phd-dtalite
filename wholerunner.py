@@ -123,9 +123,9 @@ TESTS = {
                   "scripts": ["runner_parallel_ue.py", "parallel_msa_ue.py",
                               "msa_ue.py", "assignment.py",
                               "realtimeassignment.py", "traveltimecal.py",
-                              "progress.py", "choiceset.py"],
-                  # All 8 scripts (the UE-guidance trio plus the 5 v9
-                  # support scripts) live next to wholerunner.py.
+                              "progress.py", "choiceset.py", "netconfig.py"],
+                  # All 9 scripts (the UE-guidance trio, the 5 v9 support
+                  # scripts, and netconfig.py) live next to wholerunner.py.
                   "script_dir": None,
                   "bigloops": "1-10", "n_bigloops": 10},
         }},
