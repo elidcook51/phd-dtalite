@@ -184,6 +184,19 @@ def stringify_pathinfo_keys(d):
             for (row, col), values in d.items()}
 
 
+def _group_agent_paths(agentpath):
+    """Group agent row indices by path string: {path: [idx, ...]}.
+
+    Indices per path are in ascending order -- exactly the matches
+    the old per-route scan of agentpath returned, built once per
+    call instead of once per route.
+    """
+    grouped = {}
+    for idx, p in enumerate(agentpath):
+        grouped.setdefault(p, []).append(idx)
+    return grouped
+
+
 def assignment(*args, **kwargs):
     """Timing wrapper around _assignment_impl (v35 instrumentation).
 
@@ -208,6 +221,17 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
 
 
     ttt = 0
+
+
+    # Set copies for the per-agent membership tests in the route-choice
+    # loop below; `i in <ndarray>` scans the whole array for every agent.
+    # Container values are integral agent indices, so int() preserves
+    # the == membership outcomes.
+    member_set = set(int(x) for x in member)
+
+    fix_user_set = set(int(x) for x in fix_user)
+
+    realtime_user_set = set(int(x) for x in realtime_user)
 
 
 
@@ -276,6 +300,10 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
 
 
         agentpath = T.iloc[:,5].astype(str).tolist()
+
+        # Path -> agent indices, grouped once; the route loop below
+        # looks paths up here instead of rescanning agentpath.
+        _agentpath_index = _group_agent_paths(agentpath)
 
 
 
@@ -415,15 +443,7 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
 
             else:
 
-                findagent = [
-
-                    idx
-
-                    for idx, p in enumerate(agentpath)
-
-                    if p == path
-
-                ]
+                findagent = _agentpath_index.get(path, [])
 
 
 
@@ -618,7 +638,7 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
 
 
 
-        if i in fix_user:
+        if i in fix_user_set:
 
 
 
@@ -670,7 +690,7 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
 
 
 
-        if i in member:
+        if i in member_set:
 
 
 
@@ -816,7 +836,7 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
 
 
 
-        if i in realtime_user:
+        if i in realtime_user_set:
 
 
 
@@ -1109,6 +1129,9 @@ def fixedcomassignment(
 
         agentpath = T.iloc[:, 29].tolist()
 
+        # Path -> agent indices, grouped once (see _group_agent_paths).
+        _agentpath_index = _group_agent_paths(agentpath)
+
 
 
         ttt = np.sum(agent[:, 2])
@@ -1340,15 +1363,7 @@ def fixedcomassignment(
 
 
 
-                findagent = [
-
-                    idx
-
-                    for idx, p in enumerate(agentpath)
-
-                    if p == path
-
-                ]
+                findagent = _agentpath_index.get(path, [])
 
 
 
@@ -1781,6 +1796,13 @@ def comassignment(
     ttt = 0
 
 
+    # Set copy for the per-agent membership test in the loop below;
+    # `i in <ndarray>` scans the whole array for every agent.
+    # Container values are integral agent indices, so int() preserves
+    # the == membership outcomes.
+    member_set = set(int(x) for x in member)
+
+
 
     # ------------------------------------------------------------------
 
@@ -1838,6 +1860,9 @@ def comassignment(
 
         agentpath = T.iloc[:, 29].tolist()
 
+        # Path -> agent indices, grouped once (see _group_agent_paths).
+        _agentpath_index = _group_agent_paths(agentpath)
+
 
 
         ttt = np.sum(agent[:, 2])
@@ -1876,6 +1901,9 @@ def comassignment(
 
 
         agentpath = T.iloc[:, 29].tolist()
+
+        # Path -> agent indices, grouped once (see _group_agent_paths).
+        _agentpath_index = _group_agent_paths(agentpath)
 
 
 
@@ -2078,15 +2106,7 @@ def comassignment(
 
             else:
 
-                matches = [
-
-                    idx
-
-                    for idx, p in enumerate(agentpath)
-
-                    if p == path
-
-                ]
+                matches = _agentpath_index.get(path, [])
 
 
 
@@ -2326,7 +2346,7 @@ def comassignment(
 
 
 
-        if i in member:
+        if i in member_set:
 
 
 

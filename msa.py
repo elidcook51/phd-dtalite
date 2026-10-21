@@ -873,54 +873,92 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
         # Build rprime for every OD column
         # (MATLAB: rprime{i,h}(j,itr) -- demand on route i of OD h
         #  in period j. Keys here are 0-based (route, od, period, itr).)
+        #
+        # Vectorized: the old code ran one np.where scan over all
+        # of bprime for every (od, route, interval) triple. This
+        # counts the same matches in a single pass -- the same
+        # five-way equality per row, tallied through a composite
+        # integer key and np.bincount. Counts are exact integers,
+        # zeros included, and keys are inserted in the same
+        # od/route/interval order as before.
         # =====================================================
+
+        # Normalize each choiceset cell once. The first valid
+        # route in a column sets that column's origin/destination,
+        # as before; a cell with no valid path gets no entries.
+        od_origin = np.full(n_od, np.nan)
+        od_destination = np.full(n_od, np.nan)
+        route_nodes = [[None] * n_routes for _ in range(n_od)]
 
         for od_idx in range(n_od):
 
-            # Find the first valid route in this OD column.
-            # Every route in the same OD column has the same
-            # origin and destination.
-            nodes = None
-
             for route_idx in range(n_routes):
 
-                _, candidate_nodes = normalize_route_path(
+                _, cell_nodes = normalize_route_path(
                     choiceset[od_idx, route_idx]
                 )
 
-                if candidate_nodes is not None:
-                    nodes = candidate_nodes
-                    break
+                route_nodes[od_idx][route_idx] = cell_nodes
 
-            # This OD column has no valid paths.
-            if nodes is None:
+                if cell_nodes is not None and np.isnan(od_origin[od_idx]):
+                    od_origin[od_idx] = float(cell_nodes[0])
+                    od_destination[od_idx] = float(cell_nodes[-1])
+
+        # A bprime row counts toward (route, od, interval) only
+        # under the same five-way equality the np.where version
+        # used: od and route indices whole and in range, departure
+        # period exactly TIME_START + interval for an interval in
+        # 0..59, and the row's origin/destination equal to the OD
+        # column's choice-path endpoints.
+        od_f = bprime[:, 0]
+        route_f = bprime[:, 1]
+        interval_f = bprime[:, 2] - netconfig.TIME_START
+
+        row_ok = (
+            (od_f == np.floor(od_f)) & (od_f >= 0) & (od_f < n_od)
+            & (route_f == np.floor(route_f)) & (route_f >= 0)
+            & (route_f < n_routes)
+            & (interval_f == np.floor(interval_f))
+            & (interval_f >= 0) & (interval_f < 60)
+        )
+
+        # Rows failing row_ok (NaN or out-of-range indices) are
+        # never counted; sanitize their indices so the endpoint
+        # lookup and the composite key stay in range.
+        od_i = np.clip(
+            np.nan_to_num(od_f, nan=0.0, posinf=0.0, neginf=0.0),
+            0, max(n_od - 1, 0)).astype(np.int64)
+        route_i = np.clip(
+            np.nan_to_num(route_f, nan=0.0, posinf=0.0, neginf=0.0),
+            0, max(n_routes - 1, 0)).astype(np.int64)
+        interval_i = np.clip(
+            np.nan_to_num(interval_f, nan=0.0, posinf=0.0, neginf=0.0),
+            0, 59).astype(np.int64)
+
+        if n_od:
+            row_ok &= (
+                (bprime[:, 3] == od_origin[od_i])
+                & (bprime[:, 4] == od_destination[od_i])
+            )
+
+        row_key = (od_i * n_routes + route_i) * 60 + interval_i
+
+        counts = np.bincount(
+            row_key[row_ok], minlength=n_od * n_routes * 60
+        ).reshape(n_od, n_routes, 60)
+
+        for od_idx in range(n_od):
+
+            if np.isnan(od_origin[od_idx]):
                 continue
 
-            origin = float(nodes[0])
-            destination = float(nodes[-1])
-
             for route_idx in range(n_routes):
 
-                # Skip OD/route cells with no valid path so that
-                # unchosen-but-valid routes still get a zero count.
-                _, route_nodes = normalize_route_path(
-                    choiceset[od_idx, route_idx]
-                )
-                if route_nodes is None:
+                if route_nodes[od_idx][route_idx] is None:
                     continue
 
-                for interval in range(60):
-
-                    # MATLAB: j = 1..60, period = j + 359.
-                    period = interval + netconfig.TIME_START
-
-                    idx = np.where(
-                        (bprime[:, 2] == period)
-                        & (bprime[:, 3] == origin)
-                        & (bprime[:, 4] == destination)
-                        & (bprime[:, 0] == od_idx)
-                        & (bprime[:, 1] == route_idx)
-                    )[0]
+                for interval, count in enumerate(
+                        counts[od_idx, route_idx].tolist()):
 
                     rprime[
                         (
@@ -929,7 +967,7 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
                             interval,
                             itr
                         )
-                    ] = len(idx)
+                    ] = count
 
 
 
