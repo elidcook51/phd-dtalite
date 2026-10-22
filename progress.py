@@ -121,3 +121,24 @@ def kill_dtalite_leftovers():
                            stderr=subprocess.DEVNULL, timeout=30)
     except Exception:
         pass
+
+
+
+def check_dtalite_outputs(label, log_path):
+    """Fail loud when DTALite exits 0 but leaves empty outputs.
+
+    DTALite's g_ProgramStop() exits 0 mid-assignment, so a zero exit
+    code does NOT mean the run completed: the step-0 truncation leaves
+    0-byte outputs and only the MOE writers (which never ran) would
+    have filled them. Catch that here, at the call site, instead of
+    letting a later pandas read die with a context-free EmptyDataError.
+    """
+    for _name in ("output_agent.csv", "output_LinkTDMOE.csv"):
+        _path = os.path.join("DTALite_Files", _name)
+        if (not os.path.exists(_path)) or os.path.getsize(_path) == 0:
+            raise RuntimeError(
+                "DTALite wrote an empty %s after %s. The exe exits 0 even "
+                "when it stops mid-assignment, so this means the run stopped "
+                "early -- see %s for the exe's own stop message."
+                % (_name, label, log_path)
+            )

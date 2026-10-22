@@ -8,12 +8,29 @@ import netconfig
 warnings.filterwarnings("ignore", category=RuntimeWarning,
                          message="divide by zero*")
 try:
-    from progress import dtalite_kwargs as _dtalite_kw, kill_dtalite_leftovers, dtalite_timeout as _dtalite_timeout
+    from progress import dtalite_kwargs as _dtalite_kw, kill_dtalite_leftovers, dtalite_timeout as _dtalite_timeout, check_dtalite_outputs
 except ImportError:
     def _dtalite_kw():
         return {}
     def _dtalite_timeout():
         return 900
+    def check_dtalite_outputs(label, log_path):
+            """Fail loud when DTALite exits 0 but leaves empty outputs.
+            DTALite's g_ProgramStop() exits 0 mid-assignment, so a zero exit
+            code does NOT mean the run completed: the step-0 truncation leaves
+            0-byte outputs and only the MOE writers (which never ran) would
+            have filled them. Catch that here, at the call site, instead of
+            letting a later pandas read die with a context-free EmptyDataError.
+            """
+            for _name in ("output_agent.csv", "output_LinkTDMOE.csv"):
+                _path = os.path.join("DTALite_Files", _name)
+                if (not os.path.exists(_path)) or os.path.getsize(_path) == 0:
+                    raise RuntimeError(
+                        "DTALite wrote an empty %s after %s. The exe exits 0 even "
+                        "when it stops mid-assignment, so this means the run stopped "
+                        "early -- see %s for the exe's own stop message."
+                        % (_name, label, log_path)
+                    )
 
 import pandas as pd
 
@@ -2578,6 +2595,11 @@ def comassignment(
 
 
 
+    # File-row indices of the agents processed so far, in phase
+    # order (parallel to final_choice). Filled in per phase below.
+    _all_phase_rows = []
+    _phase_row_index = None
+
     for subitr in range(1, phase + 1):
 
 
@@ -2690,124 +2712,74 @@ def comassignment(
 
 
 
-        j = 4
-
-
-
-        ypath = []
-
-
-
-        for j in range(x + len(p_agent)):
-
-            ypath.append(
-
-                choiceset[
-
-                    int(final_choice[j]),
-
-                    int(final_rposition[j])
-
-                ]
-
-            )
-
-
-
-        for j in range(x + len(p_agent)):
-
-            path = ypath[j]
-
-
-
-            if isinstance(path, list):
-
-                path = path[0]
-
+        # Map this phase's agents to file rows by agent_id. p_agent
+        # arrives in file order within the window, but final_choice
+        # is phase-grouped, so prefix positions do NOT line up with
+        # file rows unless the input file happens to be sorted by
+        # departure time. Place by identity, not by position.
+        if _phase_row_index is None:
+            _phase_row_index = {float(_r[0]): _i for _i, _r in enumerate(inputagent)}
+        _phase_rows = []
+        for _aid in p_agent[:, 0]:
+            _row = _phase_row_index.get(float(_aid))
+            if _row is None:
+                raise RuntimeError(
+                    "comassignment phase %d: agent %s not found in inputagent" % (subitr, _aid))
+            _phase_rows.append(_row)
+        _all_phase_rows.extend(_phase_rows)
+        for _k, _row in enumerate(_phase_rows):
+            _path = choiceset[int(ite_choice[_k]), int(updaterposition[_k])]
+            if isinstance(_path, list):
+                _path = _path[0]
                 raise SystemExit
-
-
-
-            elif isinstance(path, np.ndarray):
-
-                path = path.flat[0]
-
+            elif isinstance(_path, np.ndarray):
+                _path = _path.flat[0]
                 raise SystemExit
-
-
-
-            inputagent[j][11] = str(path)
-
-
-
+            inputagent[_row][11] = str(_path)
         if os.path.exists("DTALite_Files/input_agent.csv"):
-
             os.remove("DTALite_Files/input_agent.csv")
-
-
-
-        final_inputagent = inputagent[: (x + len(p_agent))]
-
-
-
+        # The phase file holds the agents processed so far (all phases
+        # up to this one), in file order: same count as the old prefix
+        # write, but the right agents with the right paths.
+        _processed = sorted(set(_all_phase_rows))
+        final_inputagent = [inputagent[_i] for _i in _processed]
         df = pd.DataFrame(
-
             final_inputagent,
-
             columns=[
-
                 "agent_id",
-
                 "tour_id",
-
                 "from_zone_id",
-
                 "to_zone_id",
-
                 "from_origin_node_id",
-
                 "to_destination_node_id",
-
                 "departure_time_in_min",
-
                 "demand_type",
-
                 "PCE",
-
                 "information_type",
-
                 "vehicle_age",
-
                 "path_node_sequence",
-
                 "vehicle_type",
-
                 "pricing_type",
-
                 "value_of_time"
-
             ],
-
         )
-
-        
-
         df.to_csv("DTALite_Files/input_agent.csv", index=False)
-
-
-
+        # DTALite's own stop messages used to go to DEVNULL, which is
+        # how a mid-assignment exit(0) stayed invisible. Keep this
+        # phase's stdout/stderr in a log file next to the outputs.
+        _phase_log = "DTALite_Files/dtalite_comassignment_phase%d.log" % subitr
         try:
-            subprocess.run(
-
-                [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
-
-                **_dtalite_kw()
-
-            )
+            with open(_phase_log, "w") as _lf:
+                subprocess.run(
+                    [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
+                    stdin=subprocess.DEVNULL, timeout=_dtalite_timeout(),
+                    stdout=_lf, stderr=subprocess.STDOUT,
+                )
         except subprocess.TimeoutExpired:
             kill_dtalite_leftovers()
             raise RuntimeError(
-                f"DTALite.exe timed out after {_dtalite_timeout()}s in comassignment")
+                f"DTALite.exe timed out after {_dtalite_timeout()}s in comassignment phase {subitr}")
+        check_dtalite_outputs("comassignment phase %d" % subitr, _phase_log)
 
         sanitize_dtalite_outputs()
 
@@ -2825,6 +2797,7 @@ def comassignment(
 
         b,
 
-        final_pre_choice
+        final_pre_choice,
+        _all_phase_rows
 
     )

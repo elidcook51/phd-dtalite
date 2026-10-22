@@ -1479,7 +1479,8 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1,
 
         com_inform,
 
-        pre_choice
+        pre_choice,
+        com_rows
 
     ) = comassignment(
 
@@ -1517,14 +1518,15 @@ def msa_ue(bigloop, p, p_fix, p_realtime, ue_routes_path, seed=1,
 
 
 
-    for j in range(dsize):
+    # com_choice/com_rposition arrive in phase order (see
+    # comassignment); map them to file rows by the returned row
+    # indices. Rows from no phase keep their iteration paths.
+    for _k, _row in enumerate(com_rows):
 
 
 
-        inputagent[j][11] = choiceset[
-
-            int(com_choice[j]), int(com_rposition[j])
-
+        inputagent[_row][11] = choiceset[
+            int(com_choice[_k]), int(com_rposition[_k])
         ]
 
 

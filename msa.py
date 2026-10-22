@@ -6,7 +6,7 @@ import subprocess
 
 from assignment import assignment, comassignment, sanitize_dtalite_outputs
 try:
-    from progress import get_pbar, dtalite_kwargs, kill_dtalite_leftovers, dtalite_timeout
+    from progress import get_pbar, dtalite_kwargs, kill_dtalite_leftovers, dtalite_timeout, check_dtalite_outputs
     _HAS_PROGRESS = True
 except ImportError:
     _HAS_PROGRESS = False
@@ -21,6 +21,23 @@ except ImportError:
         return {}
     def dtalite_timeout():
         return 900
+    def check_dtalite_outputs(label, log_path):
+            """Fail loud when DTALite exits 0 but leaves empty outputs.
+            DTALite's g_ProgramStop() exits 0 mid-assignment, so a zero exit
+            code does NOT mean the run completed: the step-0 truncation leaves
+            0-byte outputs and only the MOE writers (which never ran) would
+            have filled them. Catch that here, at the call site, instead of
+            letting a later pandas read die with a context-free EmptyDataError.
+            """
+            for _name in ("output_agent.csv", "output_LinkTDMOE.csv"):
+                _path = os.path.join("DTALite_Files", _name)
+                if (not os.path.exists(_path)) or os.path.getsize(_path) == 0:
+                    raise RuntimeError(
+                        "DTALite wrote an empty %s after %s. The exe exits 0 even "
+                        "when it stops mid-assignment, so this means the run stopped "
+                        "early -- see %s for the exe's own stop message."
+                        % (_name, label, log_path)
+                    )
 
 import numpy as np
 
@@ -1051,19 +1068,20 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
 
         _dt_t0 = time.time()
+        _call_log = "DTALite_Files/dtalite_itr%d.log" % itr
         try:
-            subprocess.run(
-
-                [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
-
-                **dtalite_kwargs()
-
-            )
+            with open(_call_log, "w") as _lf:
+                subprocess.run(
+                    [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
+                    stdin=subprocess.DEVNULL, timeout=dtalite_timeout(),
+                    stdout=_lf, stderr=subprocess.STDOUT,
+                )
         except subprocess.TimeoutExpired:
             kill_dtalite_leftovers()
             raise RuntimeError(
                 f"DTALite.exe timed out after {dtalite_timeout()}s (bigloop={bigloop}, itr={itr})")
         print(f"  [timing] DTALite call took {time.time() - _dt_t0:.1f}s (itr={itr})", flush=True)
+        check_dtalite_outputs("bigloop %d itr %d" % (bigloop, itr), _call_log)
         _pbar.update(1)
 
         sanitize_dtalite_outputs()
@@ -1251,19 +1269,20 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
 
     _dt_t0 = time.time()
+    _call_log = "DTALite_Files/dtalite_predict.log"
     try:
-        subprocess.run(
-
-            [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
-
-                **dtalite_kwargs()
-
-        )
+        with open(_call_log, "w") as _lf:
+            subprocess.run(
+                [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
+                stdin=subprocess.DEVNULL, timeout=dtalite_timeout(),
+                stdout=_lf, stderr=subprocess.STDOUT,
+            )
     except subprocess.TimeoutExpired:
         kill_dtalite_leftovers()
         raise RuntimeError(
             f"DTALite.exe timed out after {dtalite_timeout()}s (bigloop={bigloop}, phase=predict)")
     print(f"  [timing] DTALite call took {time.time() - _dt_t0:.1f}s (phase=predict)", flush=True)
+    check_dtalite_outputs("bigloop %d predict" % bigloop, _call_log)
 
     sanitize_dtalite_outputs()
 
@@ -1323,7 +1342,8 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
         com_inform,
 
-        pre_choice
+        pre_choice,
+        com_rows
 
     ) = comassignment(
 
@@ -1361,19 +1381,24 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
 
 
-    for j in range(dsize):
+    # com_choice/com_rposition arrive in phase order (see
+    # comassignment); map them to file rows by the returned row
+    # indices. The old prefix loop assigned phase-grouped choices
+    # to file rows by position, which is only correct when the
+    # input file is sorted by departure time.
+    for _k, _row in enumerate(com_rows):
 
 
 
         _p = choiceset[
-            int(com_choice[j]), int(com_rposition[j])
+            int(com_choice[_k]), int(com_rposition[_k])
         ]
         if _p is not None:
-            inputagent[j][11] = _p
+            inputagent[_row][11] = _p
             _nodes = [x.strip() for x in str(_p).split(';') if x.strip()]
             if len(_nodes) >= 2:
-                inputagent[j][4] = _nodes[0]
-                inputagent[j][5] = _nodes[-1]
+                inputagent[_row][4] = _nodes[0]
+                inputagent[_row][5] = _nodes[-1]
 
 
 
@@ -1382,19 +1407,20 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls'):
 
 
     _dt_t0 = time.time()
+    _call_log = "DTALite_Files/dtalite_actual.log"
     try:
-        subprocess.run(
-
-            [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
-
-                **dtalite_kwargs()
-
-        )
+        with open(_call_log, "w") as _lf:
+            subprocess.run(
+                [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
+                stdin=subprocess.DEVNULL, timeout=dtalite_timeout(),
+                stdout=_lf, stderr=subprocess.STDOUT,
+            )
     except subprocess.TimeoutExpired:
         kill_dtalite_leftovers()
         raise RuntimeError(
             f"DTALite.exe timed out after {dtalite_timeout()}s (bigloop={bigloop}, phase=actual)")
     print(f"  [timing] DTALite call took {time.time() - _dt_t0:.1f}s (phase=actual)", flush=True)
+    check_dtalite_outputs("bigloop %d actual" % bigloop, _call_log)
 
     sanitize_dtalite_outputs()
 
