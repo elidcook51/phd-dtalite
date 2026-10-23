@@ -277,6 +277,13 @@ def comrealtimeassignment(
     # pre-filled with its existing (nchoice, rposition) first, so an
     # unprocessable realtime agent keeps its prior assignment instead
     # of the old silent (0, 0) default -- a valid choiceset index.
+    # Prefill by FILE ROW (s_row), not by agent_id: nchoice,
+    # rposition and user are all row-indexed, but agent IDs are
+    # only row indices on Sioux Falls. On Baltimore (IDs like
+    # 48560234) the old agent_id indexing failed its guard for
+    # every agent, leaving -1, and comassignment then wrote
+    # choiceset[-1, -1] -- the last OD's last route -- for every
+    # non-realtime agent, which DTALite rejects as infeasible.
     rtchoice = np.full(len(p_idx), -1, dtype=int)
     updaterposition = np.full(len(p_idx), -1, dtype=int)
     pre_choice = np.zeros(len(p_idx), dtype=int)
@@ -288,12 +295,24 @@ def comrealtimeassignment(
     for row, s_row in enumerate(p_idx):
         agent_id = int(agent_id_all[s_row])
 
-        if (
-            0 <= agent_id < nchoice_arr.size
-            and 0 <= agent_id < rposition_arr.size
-        ):
-            rtchoice[row] = int(nchoice_arr[agent_id])
-            updaterposition[row] = int(rposition_arr[agent_id])
+        if not (0 <= s_row < nchoice_arr.size
+                and 0 <= s_row < rposition_arr.size):
+            raise ValueError(
+                "agent_id %d has row %d outside nchoice/rposition "
+                "size (%d, %d); refusing to keep -1"
+                % (agent_id, s_row, nchoice_arr.size,
+                  rposition_arr.size))
+        rtchoice[row] = int(nchoice_arr[s_row])
+        updaterposition[row] = int(rposition_arr[s_row])
+
+    if (rtchoice < 0).any() or (updaterposition < 0).any():
+        bad = int(np.where(rtchoice < 0)[0][0]) \
+            if (rtchoice < 0).any() \
+            else int(np.where(updaterposition < 0)[0][0])
+        raise ValueError(
+            "prefill left -1 for period agent row %d (agent_id %d); "
+            "-1 must never reach comassignment's choiceset lookup"
+            % (bad, int(agent_id_all[p_idx[bad]])))
 
     for row, s_row in enumerate(p_idx):
         agent_id = int(agent_id_all[s_row])
@@ -337,8 +356,10 @@ def comrealtimeassignment(
                 ]
             )
 
-        # The agent's own preference row (MATLAB 1-based IDs).
-        pref = int(user[agent_id, 1])
+        # The agent's own preference row: user is row-indexed,
+        # so index by s_row, not agent_id (Baltimore IDs are not
+        # row indices; agent_id indexing would IndexError here).
+        pref = int(user[s_row, 1])
         if pref < 1:
             raise ValueError(
                 f"preference id {pref} for agent {agent_id} is below 1; "
