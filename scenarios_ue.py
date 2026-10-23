@@ -443,11 +443,102 @@ def run_dtalite(data_dir, exe_override, timeout_s, log):
     return refreshed
 
 
+def _try_stream_link_time_means(path, log):
+    """Streaming per-link mean travel times for load_link_times().
+
+    Returns {(int(u), int(v)): float(mean_tt)} when the file has a
+    timestamp column (the only case where load_link_times consumes
+    means), else None -- meaning "fall back to read_dtalite_csv", which
+    preserves the no-timestamp last-wins branch and all warnings exactly.
+
+    Reads line by line (never the whole file) and replicates
+    read_dtalite_csv's ragged-row handling: strip fields, align to the
+    header width (pop trailing empties, truncate, pad), skip blank lines,
+    errors="replace" decoding. u/v/tt coerce via float() (NaN drops, inf
+    survives, as with to_numeric errors="coerce"). Grouping is by the
+    parsed float (u, v) pair with int() truncation only at the end, and
+    each mean divides by its own key's row count. On any read problem
+    the caller falls back to the full read (with a warning), so a
+    streaming failure costs speed, never correctness.
+    """
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            header = None
+            header_idx = None
+            sums = {}
+            counts = {}
+            for raw in f:
+                if not raw.strip():
+                    continue
+                fields = [fld.strip() for fld in raw.split(",")]
+                if header is None:
+                    header = fields
+                    lowered = [c.strip().lower() for c in header]
+
+                    def find_exact(want):
+                        for i, nm in enumerate(lowered):
+                            if nm == want:
+                                return i
+                        return None
+
+                    def find(*needles, exclude=()):
+                        for i, nm in enumerate(lowered):
+                            if (all(n in nm for n in needles)
+                                    and not any(e in nm for e in exclude)):
+                                return i
+                        return None
+
+                    i_from = find_exact("from_node_id") or find("from", exclude=("transform",))
+                    i_to = find_exact("to_node_id") or find("to", exclude=("from",))
+                    i_tt = find("travel", "time")
+                    i_ts = find("timestamp")
+                    if i_from is None or i_to is None or i_tt is None or i_ts is None:
+                        return None
+                    header_idx = (i_from, i_to, i_tt)
+                    n = len(header)
+                    continue
+                while len(fields) > n and fields[-1] == "":
+                    fields.pop()
+                if len(fields) > n:
+                    fields = fields[:n]
+                while len(fields) < n:
+                    fields.append("")
+                i_from, i_to, i_tt = header_idx
+                try:
+                    u = float(fields[i_from])
+                    v = float(fields[i_to])
+                    tt = float(fields[i_tt])
+                except (ValueError, TypeError):
+                    continue
+                if u != u or v != v or tt != tt:
+                    continue
+                key = (u, v)
+                sums[key] = sums.get(key, 0.0) + tt
+                counts[key] = counts.get(key, 0) + 1
+        if header is None or not sums:
+            return None
+        return {(int(u), int(v)): sums[(u, v)] / counts[(u, v)]
+                for (u, v) in sums}
+    except Exception as exc:
+        log("warning: streaming read failed for %s (%s), falling back to full read"
+            % (path, exc))
+        return None
+
+
 def load_link_times(data_dir, refreshed, freeflow, log):
     for name in ("output_link.csv", "output_LinkTDMOE.csv", "Each iteration.csv"):
         if name not in refreshed:
             continue
         try:
+            # Streaming fast path: with a timestamp column only per-link
+            # means are ever consumed, so accumulate sum+count line by
+            # line instead of materializing the whole file. None means
+            # fall back to the full read below (no timestamp column,
+            # unusable file, or streaming failure) -- behavior unchanged.
+            _streamed = _try_stream_link_time_means(data_dir / name, log)
+            if _streamed is not None:
+                log("link times: %d links from %s" % (len(_streamed), name))
+                return _streamed
             df = read_dtalite_csv(data_dir / name, log)
         except Exception as exc:
             log("warning: could not read %s (%s)" % (name, exc))

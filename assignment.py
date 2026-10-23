@@ -294,7 +294,7 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
             TDlink = np.empty((0, 4))
             TDlink_table = None
         else:
-            TDlink_table = pd.read_csv('DTALite_Files/Each iteration.csv')
+            TDlink_table = pd.read_csv('DTALite_Files/Each iteration.csv', usecols=[0, 1, 4, 5])
 
 
 
@@ -344,7 +344,7 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
 
 
 
-        TDlink_table = pd.read_csv('DTALite_Files/iteration_LinkTDMOE.csv')
+        TDlink_table = pd.read_csv('DTALite_Files/iteration_LinkTDMOE.csv', usecols=[0, 1, 4, 5])
 
 
 
@@ -364,7 +364,7 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
                 % (_n_agent_rows, dsize, dsize - _n_agent_rows))
 
     if TDlink_table is not None:
-        TDlink = TDlink_table.iloc[:, [0,1,4,5]].to_numpy()
+        TDlink = TDlink_table.to_numpy()
 
 
 
@@ -1861,7 +1861,7 @@ def comassignment(
 
     elif itr == 100:
 
-        T = pd.read_csv("DTALite_Files/UOinfor_agent.csv")
+        T = pd.read_csv("DTALite_Files/UOinfor_agent.csv", usecols=[0, 7, 8, 9, 12, 29])
 
 
 
@@ -1869,13 +1869,13 @@ def comassignment(
 
         agent[:, 0] = T.iloc[:, 0]
 
-        agent[:, 1] = T.iloc[:, 9]
+        agent[:, 1] = T.iloc[:, 3]
 
-        agent[:, 2] = T.iloc[:, 12]
+        agent[:, 2] = T.iloc[:, 4]
 
 
 
-        agentpath = T.iloc[:, 29].tolist()
+        agentpath = T.iloc[:, 5].tolist()
 
         # Path -> agent indices, grouped once (see _group_agent_paths).
         _agentpath_index = _group_agent_paths(agentpath)
@@ -1895,7 +1895,7 @@ def comassignment(
         else:
             agentOD = np.column_stack(
 
-                [T.iloc[:, 7].to_numpy(), T.iloc[:, 8].to_numpy()]
+                [T.iloc[:, 1].to_numpy(), T.iloc[:, 2].to_numpy()]
 
             )
 
@@ -1965,7 +1965,7 @@ def comassignment(
 
 
 
-    TD = None if tdfile is None else pd.read_csv(tdfile)
+    TD = None if tdfile is None else pd.read_csv(tdfile, usecols=[0, 1, 4, 5])
 
 
 
@@ -1977,9 +1977,9 @@ def comassignment(
 
                 TD.iloc[:num_tdlink_rows, 1],
 
-                TD.iloc[:num_tdlink_rows, 4],
+                TD.iloc[:num_tdlink_rows, 2],
 
-                TD.iloc[:num_tdlink_rows, 5],
+                TD.iloc[:num_tdlink_rows, 3],
 
             ]
 
