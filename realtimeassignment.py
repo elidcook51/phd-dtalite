@@ -405,19 +405,6 @@ def comrealtimeassignment(
         updaterposition[row] = croute
         pre_choice[row] = pre_croute
 
-    if itr == int(np.floor(60.0 / phlength)):
-        savemat(
-            f"DTALite_Files/pathinfo_comrealass{bigloop}.mat",
-            {
-                "len": len_mat,
-                "tt": _dict_to_dense(tt, (n_od_rows, n_route_cols)),
-                "pltt": _dict_to_dense(pltt, (n_od_rows, n_route_cols)),
-                "fuelcost": _dict_to_dense(
-                    fuelcost, (n_od_rows, n_route_cols)
-                ),
-                "nc": nc,
-            },
-        )
 
     return rtchoice, updaterposition, tt, b, p_agent, pre_choice
 
@@ -1004,30 +991,6 @@ def realtimeassignment_fast(
         rtchoice[period_row] = best_row
         updaterposition[period_row] = best_col
 
-    # ---------------------------------------------------------
-    # Save final period route information
-    # ---------------------------------------------------------
 
-    if itr == int(np.floor(60.0 / phlength)):
-        output_name = (
-            f"DTALite_Files/pathinfo_realass{bigloop}.mat"
-        )
-
-        # Convert nested dictionaries to dense arrays before saving.
-        # MATLAB cannot naturally represent the Python dictionary keys.
-        savemat(
-            output_name,
-            {
-                "len": len_arr,
-                "tt": current_tt,
-                "pltt": current_pltt,
-                "fuelcost": current_fuelcost,
-                "nc": nc,
-                "period_key": np.array(
-                    [[period_key]],
-                    dtype=float,
-                ),
-            },
-        )
 
     return rtchoice, updaterposition, tt, b, p_agent
