@@ -200,21 +200,72 @@ class Simulator:
             if time_int in world.original_td_map:
                 self.td_map[time_int] = list(world.original_td_map[time_int])
             step += 1
-        # main loop: no early exit, horizon = loading end + 300
+        # Early-exit bookkeeping. n_generatable counts, once, the vehicles
+        # that can ever be generated and completed: stage 0 loads only
+        # vehicles with node_size >= 2, and node_size is final at this
+        # point (iteration-0 assignment already ran; the real-time
+        # adjustments rewrite only loaded or in-transit vehicles and keep
+        # node_size >= 2, so nothing can join the generatable set later).
+        # The count is therefore exact for the generated set and a superset
+        # of the completed set: a counted vehicle that never completes
+        # (permanent gridlock) simply keeps the break from firing.
+        self.n_generatable = 0
+        for agent_id in world.vehicle_order:
+            if world.vehicles[agent_id].node_size >= 2:
+                self.n_generatable += 1
+        self._early_exit_vetoed = False
+        # Main loop: stops early once the network is drained (see the
+        # break below). horizon = loading end + 300.
         step = 0
         time = float(world.start)
         while time < limit:
             time = world.start + step * SIM_INTERVAL
             self.step(time, step)
+            step_no = step
             step += 1
+            # Early exit. Every clause is an O(1) integer/float compare.
+            # time > world.end: every registered departure lies in
+            # [start, end] (read time rejects anything outside), and each
+            # departure bucket is visited exactly once as the clock
+            # advances, so past end no vehicle can still be generated.
+            # step_no % 10 == 0: the break step is a minute boundary, so
+            # stage 5 has just written this minute's MOE from final flows
+            # and the post-pass propagates those finals over the tail.
+            # generated == completed == n_generatable: every generatable
+            # vehicle entered the network and reached its destination.
+            if not self._early_exit_vetoed and time > world.end and \
+                    step_no % 10 == 0 and \
+                    self.generated == self.n_generatable and \
+                    self.completed == self.n_generatable:
+                # Belt-and-braces veto scan: ground truth for "nothing in
+                # transit" is the queue system itself (a generated vehicle
+                # sits in exactly one of loading_buffer, entrance_queue,
+                # exit_queue until its completion pop). It runs at most
+                # once: a veto disables all later checks and the run
+                # continues to the horizon, outputs identical to unpatched.
+                if self._queues_empty():
+                    break
+                self._early_exit_vetoed = True
         self._post_loading()
+
+    def _queues_empty(self):
+        for link in self.world.links:
+            if link.loading_buffer or link.entrance_queue or \
+                    link.exit_queue:
+                return False
+        return True
 
     def _post_loading(self):
         world = self.world
         for link in world.links:
             # "remove data holes": forward cumulative-max pass over the
-            # cumulative arrival/departure counts (simulation.cpp:2148)
-            upper = min(world.horizon + 1, world.horizon) - 1
+            # cumulative arrival/departure counts (simulation.cpp:2148).
+            # The pass must reach the horizon index itself: LinkTDMOE and
+            # LinkMOE read moe[horizon], and after an early break that
+            # entry is filled by propagation from the last written minute.
+            # For an unpatched run this changes nothing (moe[horizon] is
+            # already stage-5-written to final flows, and max() keeps it).
+            upper = min(world.horizon + 1, world.horizon)
             for t in range(world.start + 1, upper + 1):
                 if link.moe[t - 1].cum_arrival > link.moe[t].cum_arrival:
                     link.moe[t].cum_arrival = link.moe[t - 1].cum_arrival
