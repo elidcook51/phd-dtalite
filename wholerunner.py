@@ -44,6 +44,8 @@ Outputs per test under <results-dir>/:
   test5/    proposed_sweep/bigloop_0..10/, ue_sweep/bigloop_1..10/,
             mpr_table5.csv, mpr_table6.csv, mpr_summary.txt
   test6/    volume_estimation.csv, volume_estimation_summary.txt
+  (root)    table4_emissions.csv, table4_emissions_summary.txt
+            (Tests 1-4 per-scenario emissions, via table4_emissions.py)
 
 Sandboxes live in temp/run_<pid>/<name>/ and are deleted on success unless
 --keep-temp is given. On failure the sandbox is kept and its path is
@@ -557,127 +559,11 @@ def display_loop(tracker, keys, stop_event, interval=2.0):
 # ----------------------------------------------------------------------
 # Sandbox setup (fail-fast: any error here aborts before anything runs)
 # ----------------------------------------------------------------------
-# PySim emissions tiers, as written to [emission] output_emission_data in
-# the staged DTASettings.txt: 0 = off, 1 = approx, 2 = full. The CLI flag
-# --emission-mode maps names to these values; None means no override.
-EMISSION_MODE_FLAGS = {"off": 0, "approx": 1, "full": 2}
-
-_EMISSION_KEY_RE = re.compile(rb"^\s*output_emission_data\s*=", re.IGNORECASE)
-_EMISSION_SECTION_RE = re.compile(rb"^\s*\[\s*emission\s*\]\s*$",
-                                   re.IGNORECASE)
-_SECTION_HEADER_RE = re.compile(rb"^\s*\[(.+?)\]\s*$")
-
-
-def _split_line_ending(line):
-    """Split a raw line into (content, ending); ending is b'\\r\\n',
-    b'\\n', b'\\r', or b'' for a final unterminated line."""
-    if line.endswith(b"\r\n"):
-        return line[:-2], b"\r\n"
-    if line.endswith(b"\n") or line.endswith(b"\r"):
-        return line[:-1], line[-1:]
-    return line, b""
-
-
-def read_emission_flag(settings_path):
-    """Value of [emission] output_emission_data in a DTASettings.txt, or
-    None if the file, the section, or the key is absent. Only the key
-    inside the [emission] section counts; the same key under another
-    section does not. Returns the raw value string (stripped)."""
-    if not os.path.isfile(settings_path):
-        return None
-    with open(settings_path, "rb") as f:
-        data = f.read()
-    in_emission = False
-    for raw in data.splitlines(keepends=True):
-        content, _ = _split_line_ending(raw)
-        if _SECTION_HEADER_RE.match(content):
-            in_emission = bool(_EMISSION_SECTION_RE.match(content))
-            continue
-        if in_emission and _EMISSION_KEY_RE.match(content):
-            return content.split(b"=", 1)[1].strip().decode("ascii", "replace")
-    return None
-
-
-def verify_emission_flag(settings_path, flag):
-    """Re-read settings_path and raise RuntimeError unless [emission]
-    output_emission_data equals flag. Fail loud, never silent."""
-    value = read_emission_flag(settings_path)
-    if value != str(flag):
-        raise RuntimeError(
-            "emission mode verification failed for %s: expected "
-            "output_emission_data=%s under [emission], found %r"
-            % (settings_path, flag, value))
-
-
-def apply_emission_mode(settings_path, flag):
-    """Write output_emission_data=<flag> into the [emission] section of
-    the STAGED settings file at settings_path (callers only ever pass
-    sandbox copies, never a source data dir). Line-based, not a
-    configparser round-trip, so comments, other settings, and per-line
-    endings survive. Handles: section+key present (replace the line),
-    section present/key absent (insert after the header), section
-    absent (append section + key), file missing (create it). Re-reads
-    and verifies afterwards; raises RuntimeError on mismatch."""
-    new_line = b"output_emission_data=" + str(flag).encode("ascii")
-    if os.path.isfile(settings_path):
-        with open(settings_path, "rb") as f:
-            lines = f.read().splitlines(keepends=True)
-    else:
-        lines = []
-    # Newline style for inserted lines: the file's first existing ending,
-    # else the platform default (only matters for a created file).
-    style = os.linesep.encode("ascii")
-    for raw in lines:
-        _, ending = _split_line_ending(raw)
-        if ending:
-            style = ending
-            break
-    out = []
-    in_emission = False
-    section_at = None
-    key_done = False
-    for raw in lines:
-        content, ending = _split_line_ending(raw)
-        if _SECTION_HEADER_RE.match(content):
-            in_emission = bool(_EMISSION_SECTION_RE.match(content))
-            if in_emission and section_at is None:
-                section_at = len(out)
-            out.append((content, ending))
-            continue
-        if in_emission and not key_done and _EMISSION_KEY_RE.match(content):
-            out.append((new_line, ending))
-            key_done = True
-            continue
-        out.append((content, ending))
-    if not key_done and section_at is not None:
-        # Section exists but no key: insert after its header. If the
-        # header was the unterminated last line, terminate it first.
-        content, ending = out[section_at]
-        if not ending:
-            out[section_at] = (content, style)
-        out.insert(section_at + 1, (new_line, style))
-        key_done = True
-    if not key_done:
-        # No [emission] section: append it. Terminate a trailing
-        # unterminated line first so the new section starts on its own line.
-        if out and not out[-1][1]:
-            content, _ = out[-1]
-            out[-1] = (content, style)
-        out.append((b"[emission]", style))
-        out.append((new_line, style))
-    with open(settings_path, "wb") as f:
-        for content, ending in out:
-            f.write(content + ending)
-    verify_emission_flag(settings_path, flag)
-
-
-def setup_sandbox(name, data_dir, temp_root, scripts, emission_flag=None):
+def setup_sandbox(name, data_dir, temp_root, scripts):
     """Create temp/run_<pid>/<name>/ with a private DTALite_Files/ copy and
     the job's scripts. `scripts` is a list of (src_dir, filename) tuples;
     src_dir None means next to wholerunner.py, otherwise a subdir of HERE.
-    emission_flag None leaves the staged DTASettings.txt untouched;
-    otherwise the [emission] tier is forced in the staged copy only (the
-    source data dir is never modified). Raises on any error."""
+    Raises on any error."""
     sandbox = os.path.join(temp_root, name)
     if os.path.isdir(sandbox):
         log("removing stale sandbox %s" % sandbox)
@@ -687,11 +573,6 @@ def setup_sandbox(name, data_dir, temp_root, scripts, emission_flag=None):
     sandbox_data = os.path.join(sandbox, "DTALite_Files")
     log("%s: copying DTALite_Files -> sandbox ..." % name)
     shutil.copytree(data_dir, sandbox_data)
-    if emission_flag is not None:
-        apply_emission_mode(
-            os.path.join(sandbox_data, "DTASettings.txt"), emission_flag)
-        log("%s: emission mode override -> %d (staged DTASettings.txt only)"
-            % (name, emission_flag))
 
     for src_dir, fn in scripts:
         if src_dir:
@@ -753,7 +634,7 @@ def test1_commands(sandbox, seed, test1_mode="single", network="siouxfalls",
     return [(cmd, desc)]
 
 
-def test24_commands(test, sandbox, seed, network="siouxfalls", gap_threshold=0.0001,
+def test24_commands(test, sandbox, seed, network="siouxfalls", gap_threshold=0.001,
                       engine="pysim"):
     """Guidance scenario followed by the preference-reaction step."""
     staging = os.path.join(sandbox, "staging")
@@ -1011,7 +892,7 @@ def _run_commands(label, sandbox, cmds, tracker, key, parse_line):
     return True, dt
 
 def run_test(test, sandbox, tracker=None, seed=42, test1_mode="single",
-           network="siouxfalls", gap_threshold=0.0001, engine="pysim"):
+           network="siouxfalls", gap_threshold=0.001, engine="pysim"):
     """Run one test's command sequence inside its sandbox. Returns
     (ok, elapsed)."""
     cfg = TESTS[test]
@@ -1332,26 +1213,46 @@ def _proposed_pair_exists(d):
     return bool(preds & acts)
 
 
+def _scenario_actual_path(t, results_root):
+    """First existing actual-LinkMOE candidate for Test t (2-4), or None.
+
+    Mirrors volume_estimation.SCENARIO_ACTUAL_CANDIDATES: collect_234()
+    copies the reaction run's output_LinkMOE.csv into
+    testN/full_results/; the bare testN/output_LinkMOE.csv fallback
+    covers hand-assembled results dirs."""
+    test_dir = os.path.join(results_root, "test%d" % t)
+    for cand in ("full_results/output_LinkMOE.csv", "output_LinkMOE.csv"):
+        p = os.path.join(test_dir, cand)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
 def results_exist(t, results_root):
     """True if Test t's results are present and usable by
     volume_estimation. Test 1 needs a predict/actual LinkMOE pair (the
-    hard requirement for Figure 8); tests 2-4 each need
-    predicted_LinkMOE.csv."""
+    hard requirement for Figure 8); tests 2-4 each need BOTH
+    predicted_LinkMOE.csv AND the reaction run's actual LinkMOE file.
+    A test with only the predicted file counts as missing here, so
+    Test 6 smart mode reruns it as a prerequisite instead of passing a
+    half-usable system to volume_estimation (which would skip it)."""
     if t == 1:
         d = os.path.join(results_root, "test1", "full_results")
         if not os.path.isdir(d):
             return False
         return _proposed_pair_exists(d)
     if t in (2, 3, 4):
-        return os.path.isfile(os.path.join(
-            results_root, "test%d" % t, "predicted_LinkMOE.csv"))
+        return (os.path.isfile(os.path.join(
+                    results_root, "test%d" % t, "predicted_LinkMOE.csv"))
+                and _scenario_actual_path(t, results_root) is not None)
     return False
 
 
 def run_test6(results_root, tracker=None):
     """Run volume_estimation.py in-place (no sandbox; read-only analysis).
-    Analyzes whichever of Tests 1-4 have usable results. Returns
-    (ok, elapsed). Raises RuntimeError if none do."""
+    Analyzes whichever of Tests 1-4 have complete predicted/actual
+    pairs (see results_exist). Returns (ok, elapsed). Raises
+    RuntimeError if none do."""
     systems = ["test%d" % t for t in (1, 2, 3, 4)
                if results_exist(t, results_root)]
     if not systems:
@@ -1382,6 +1283,304 @@ def run_test6(results_root, tracker=None):
         tracker.finish(6, ok)
     log("Test 6: %s (%s)" % ("done" if ok else "FAILED", fmt_min(dt)))
     return ok, dt
+
+
+# ----------------------------------------------------------------------
+# Run manifest (big-run package, Worker 4)
+# ----------------------------------------------------------------------
+# results/manifest.txt: methods setup facts for the paper, read at
+# runtime from the actual input files -- never hardcoded Sioux Falls
+# numbers, so the same code serves Baltimore (--network baltimore).
+# Written once at run start (status: started) and rewritten at run end
+# (status: completed/failed) with outcomes. A missing or unreadable
+# input file is recorded as "unknown", never fatal: the manifest must
+# not kill a run. Engine-independent: it only records args.engine, it
+# never branches on it, so it works under --engine dtalite and pysim.
+# NOTE: the file lives at the results ROOT (results/manifest.txt), not
+# inside a per-test dir, so the auto-clear of per-test dirs (which runs
+# before the start-manifest write) can never delete it.
+MANIFEST_NAME = "manifest.txt"
+_MANIFEST_UNKNOWN = "unknown"
+
+
+def _manifest_ts(t):
+    if t is None:
+        return _MANIFEST_UNKNOWN
+    try:
+        return time.strftime("%Y-%m-%d %H:%M:%S %Z", time.localtime(t))
+    except Exception:
+        return _MANIFEST_UNKNOWN
+
+
+def _manifest_csv_rows(path):
+    """Data-row count of a CSV file, or None if it cannot be read."""
+    try:
+        with open(path, newline="") as f:
+            rows = list(csv.reader(f))
+        if not rows:
+            return 0
+        return max(0, len(rows) - 1)
+    except Exception:
+        return None
+
+
+def _manifest_agent_stats(data_dir):
+    """(agents, dep_min, dep_max, od_cells) from input_agent_initial.csv.
+
+    Any element is None when the file is missing or unreadable. OD
+    cells are distinct (from_zone_id, to_zone_id) pairs in the agent
+    file, i.e. the ODs actually travelled, as opposed to the demand
+    matrix below (which may list zero-demand cells as well).
+    """
+    path = os.path.join(data_dir, "input_agent_initial.csv")
+    try:
+        with open(path, newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader)
+        cols = {}
+        for i, name in enumerate(header):
+            cols[name.strip()] = i
+        need = ("from_zone_id", "to_zone_id", "departure_time_in_min")
+        if any(c not in cols for c in need):
+            return None, None, None, None
+        agents = 0
+        dep_min = None
+        dep_max = None
+        ods = set()
+        with open(path, newline="") as f:
+            reader = csv.reader(f)
+            next(reader)
+            for row in reader:
+                if len(row) <= max(cols[c] for c in need):
+                    continue
+                agents += 1
+                try:
+                    dep = float(row[cols["departure_time_in_min"]])
+                except (ValueError, TypeError):
+                    dep = None
+                if dep is not None:
+                    dep_min = dep if dep_min is None else min(dep_min, dep)
+                    dep_max = dep if dep_max is None else max(dep_max, dep)
+                ods.add((row[cols["from_zone_id"]].strip(),
+                         row[cols["to_zone_id"]].strip()))
+        return agents, dep_min, dep_max, len(ods)
+    except Exception:
+        return None, None, None, None
+
+
+def _manifest_demand_od_cells(data_dir):
+    """Nonzero cells of input_demand.csv (OD matrix), or None."""
+    path = os.path.join(data_dir, "input_demand.csv")
+    try:
+        with open(path, newline="") as f:
+            rows = list(csv.reader(f))
+        if len(rows) < 2:
+            return None
+        count = 0
+        for row in rows[1:]:
+            for val in row[1:]:
+                try:
+                    if float(val) != 0:
+                        count += 1
+                except (ValueError, TypeError):
+                    continue
+        return count
+    except Exception:
+        return None
+
+
+def _manifest_choice_set(data_dir):
+    """(source_file, od_cells, total_routes) for the choice set.
+
+    Baltimore path: choice_sets.pkl ({(oz, dz): [paths]}), counted
+    directly. Sioux Falls path: a MATLAB .mat file, counted via
+    scipy when available (finallist cells); without scipy the file is
+    still named but the counts stay unknown rather than guessed.
+    """
+    pkl = os.path.join(data_dir, "choice_sets.pkl")
+    if os.path.isfile(pkl):
+        try:
+            import pickle
+            with open(pkl, "rb") as f:
+                choice_dict = pickle.load(f)
+            return ("choice_sets.pkl", len(choice_dict),
+                    sum(len(v) for v in choice_dict.values()))
+        except Exception:
+            return ("choice_sets.pkl", None, None)
+    mats = sorted(glob.glob(os.path.join(data_dir, "choice*.mat")))
+    if mats:
+        src = os.path.basename(mats[0])
+        try:
+            from scipy.io import loadmat
+            mat = loadmat(mats[0])
+            final = mat.get("finallist")
+            if final is None:
+                return (src, None, None)
+            # The pipeline transposes finallist (msa.py: choiceset =
+            # mat['finallist'].T), so OD cells are shape[1] after that
+            # transpose (576 ODs x up to 10 routes), not shape[0].
+            ods = final.shape[1] if len(final.shape) == 2 else final.shape[0]
+            routes = 0
+            for cell in final.flat:
+                try:
+                    if cell is not None and len(cell):
+                        routes += 1
+                except TypeError:
+                    routes += 1
+            return (src, ods, routes)
+        except Exception:
+            return (src, None, None)
+    return (None, None, None)
+
+
+def _manifest_test6_systems(results_root):
+    """Tests 1-4 with a results dir on disk (Test 6's actual systems)."""
+    return ["test%d" % t for t in (1, 2, 3, 4)
+            if os.path.isdir(os.path.join(results_root,
+                                          RESULT_DIR_NAMES[t]))]
+
+
+def _manifest_val(value):
+    return _MANIFEST_UNKNOWN if value is None else str(value)
+
+
+def write_run_manifest(results_root, args, tests, data_dir, status,
+                       outcomes=None, sweep_outcomes=None,
+                       agg_status=None, started=None, ended=None,
+                       cmdline=None):
+    """Write (or rewrite) results/manifest.txt. Never raises."""
+    try:
+        agents, dep_min, dep_max, agent_ods = _manifest_agent_stats(data_dir)
+        demand_ods = _manifest_demand_od_cells(data_dir)
+        links = _manifest_csv_rows(os.path.join(data_dir, "input_link.csv"))
+        nodes = _manifest_csv_rows(os.path.join(data_dir, "input_node.csv"))
+        choice_src, choice_ods, choice_routes = _manifest_choice_set(data_dir)
+        lines = []
+        lines.append("Run manifest -- Bingrong Ch.4 Tests 1-6 (wholerunner.py)")
+        lines.append("status: %s" % status)
+        lines.append("timestamp_start: %s" % _manifest_ts(started))
+        lines.append("timestamp_end: %s" % _manifest_ts(ended))
+        lines.append("command_line: %s" % (cmdline or _MANIFEST_UNKNOWN))
+        lines.append("network: %s" % args.network)
+        lines.append("data_dir: %s" % data_dir)
+        lines.append("results_dir: %s" % results_root)
+        lines.append("engine: %s" % args.engine)
+        lines.append("seed: %s" % args.seed)
+        lines.append("")
+        lines.append("Demand and network (read from the input files):")
+        lines.append("agents: %s" % _manifest_val(agents))
+        lines.append("od_cells_agent_file: %s" % _manifest_val(agent_ods))
+        lines.append("od_cells_demand_file: %s" % _manifest_val(demand_ods))
+        lines.append("choice_set_file: %s" % _manifest_val(choice_src))
+        lines.append("choice_set_od_cells: %s" % _manifest_val(choice_ods))
+        lines.append("choice_set_routes_total: %s"
+                     % _manifest_val(choice_routes))
+        lines.append("links: %s" % _manifest_val(links))
+        lines.append("nodes: %s" % _manifest_val(nodes))
+        if dep_min is not None and dep_max is not None:
+            lines.append("departure_window_min: %s (minutes)" % dep_min)
+            lines.append("departure_window_max: %s (minutes)" % dep_max)
+        else:
+            lines.append("departure_window_min: %s" % _MANIFEST_UNKNOWN)
+            lines.append("departure_window_max: %s" % _MANIFEST_UNKNOWN)
+        lines.append("")
+        lines.append("Methods setup:")
+        lines.append("standardization: meanstd28 "
+                     "(weights sheet cols A:E, rows 2-3; "
+                     "UE standardization per msa.m / msa.py)")
+        lines.append("preference_weights_predict: estimated weights, "
+                     "cols A:F of the weights sheet")
+        lines.append("preference_weights_reaction: true weights, "
+                     "cols J:O of the weights sheet")
+        lines.append("ue_gap_threshold: %s" % args.gap_threshold)
+        lines.append("ue_max_iters: %s" % T4_MAX_ITERS)
+        lines.append("")
+        lines.append("Per-test configuration (selected tests only):")
+        lines.append("tests_selected: %s"
+                     % ", ".join(str(t) for t in tests))
+        if 1 in tests:
+            lines.append("test1_bigloops: %s"
+                         % ("10 only (single mode)"
+                            if args.test1_mode == "single"
+                            else "0-10 (sweep mode)"))
+        if 2 in tests:
+            lines.append("test2_sigma_min: %s" % TESTS[2]["sigma"])
+        if 3 in tests:
+            lines.append("test3_sigma_min: %s" % TESTS[3]["sigma"])
+        if 4 in tests:
+            lines.append("test4_max_iters: %s" % T4_MAX_ITERS)
+            lines.append("test4_gap_threshold: %s" % args.gap_threshold)
+        if 5 in tests:
+            lines.append("test5_proposed_bigloops: %s"
+                         % TESTS[5]["subs"]["P"]["bigloops"])
+            lines.append("test5_ue_bigloops: %s"
+                         % TESTS[5]["subs"]["U"]["bigloops"])
+        if 6 in tests:
+            if status == "started":
+                lines.append("test6_systems: test1,test2,test3,test4 "
+                             "(planned; actual systems are those with "
+                             "results dirs when Test 6 runs)")
+            else:
+                lines.append("test6_systems: %s"
+                             % (",".join(_manifest_test6_systems(results_root))
+                                or _MANIFEST_UNKNOWN))
+        if outcomes is not None:
+            lines.append("")
+            lines.append("Outcomes:")
+            for t in tests:
+                if t == 5:
+                    lines.append("test5_proposed_sweep: %s"
+                                 % ("OK" if sweep_outcomes.get("P")
+                                    else "FAILED"))
+                    lines.append("test5_ue_sweep: %s"
+                                 % ("OK" if sweep_outcomes.get("U")
+                                    else "FAILED"))
+                    lines.append("test5_aggregation: %s"
+                                 % (agg_status or _MANIFEST_UNKNOWN))
+                else:
+                    lines.append("test%d: %s"
+                                 % (t, "OK" if outcomes.get(t) else "FAILED"))
+        path = os.path.join(results_root, MANIFEST_NAME)
+        with open(path, "w", newline="") as f:
+            f.write("\r\n".join(lines) + "\r\n")
+        log("Run manifest: %s" % path)
+    except Exception as e:
+        log("WARNING: could not write run manifest: %s" % e)
+
+
+# ----------------------------------------------------------------------
+# Table 4 emissions (Tests 1-4)
+# ----------------------------------------------------------------------
+def run_table4_emissions(results_root):
+    """Compute Table 4 emissions from the collected Tests 1-4 results.
+
+    Thin wrapper over table4_emissions.py (same directory): writes
+    table4_emissions.csv + table4_emissions_summary.txt into
+    results_root and appends a Table 4 block to each available per-test
+    summary file. Returns True if at least one scenario row was
+    written, False otherwise. Never raises for missing data -- a
+    partial run writes the rows it can and notes the rest -- but an
+    import failure or an output-write error propagates to the caller,
+    which logs it as a warning so the overall run is never failed by
+    this step alone. Deliberately independent of run_test6() and of
+    any manifest/threshold/auto-clear logic.
+    """
+    try:
+        import table4_emissions
+    except ImportError:
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)
+        import table4_emissions
+    rows, notes = table4_emissions.build_table4_emissions(results_root)
+    for note in notes:
+        log("Table 4: %s" % note)
+    if rows:
+        log("Table 4: wrote table4_emissions.csv (%d scenario rows)"
+            % len(rows))
+        return True
+    log("Table 4: WARNING: no scenario rows written "
+        "(no collected agent files found for Tests 1-4)")
+    return False
 
 
 # ----------------------------------------------------------------------
@@ -1436,12 +1635,75 @@ def print_summary(results_root, tests, outcomes, sweep_outcomes, agg_status):
                             log("  " + line)
             else:
                 log("  (no reaction_summary.txt)")
+    t4 = os.path.join(results_root, "table4_emissions.csv")
+    log("Table 4 emissions: %s"
+        % ("present" if os.path.isfile(t4) else "MISSING"))
     log("=" * 60)
 
 
 # ----------------------------------------------------------------------
 # Main
 # ----------------------------------------------------------------------
+def auto_clear_results(results_root, tests):
+    """Delete and recreate the results subdirectories for the tests in
+    `tests` -- per-test scope only, never the results root itself.
+
+    Why: the collect_* functions only overwrite files, never delete
+    them, so a stale file from a partial/failed run would otherwise
+    survive into the new run's tables (the stale Test 5 bigloop_1
+    class of bug). Clearing before a test runs makes every run start
+    from an empty per-test dir.
+
+    Scope rules (enforced by main()'s call site, after the Test 6
+    prereq fold):
+      * Only tests in `tests` are cleared. On a bare `--tests 6` run
+        that means test6/ only: Tests 1-4 results are Test 6's inputs
+        and must be left alone.
+      * A `--tests 6` run that folds in a missing prerequisite clears
+        that prerequisite's dir too, since it is about to be rerun;
+        usable prerequisites that were NOT folded in are untouched.
+      * A Test 4 run launched only as a Test 5 dependency (4 not in
+        `tests`) is NOT cleared: its existing ue_routes.csv is the
+        input the 5U sweep reuses.
+    A removal failure is fatal (sys.exit(1)): proceeding with a
+    half-cleared dir would silently mix stale and fresh results, which
+    is exactly what auto-clear exists to prevent. The usual cause on
+    Windows is a locked file (stale python.exe / open file); unlock
+    and rerun. Engine-agnostic: this only touches result dirs, never
+    engine outputs in sandboxes.
+    """
+    for t in sorted(set(tests)):
+        name = RESULT_DIR_NAMES.get(t)
+        if name is None:
+            continue
+        out = os.path.join(results_root, name)
+        # Safety: delete only a direct child of the results root, and
+        # never the root itself, whatever RESULT_DIR_NAMES holds.
+        if (os.path.abspath(out) == os.path.abspath(results_root)
+                or os.path.dirname(os.path.abspath(out))
+                != os.path.abspath(results_root)):
+            continue
+        if os.path.isdir(out):
+            try:
+                shutil.rmtree(out)
+            except OSError as e:
+                print("ERROR: Auto-clear failed to remove %s: %s"
+                      % (out, e), file=sys.stderr)
+                sys.exit(1)
+            log("Auto-clear: removed %s" % out)
+        elif os.path.lexists(out):
+            try:
+                os.remove(out)
+            except OSError as e:
+                print("ERROR: Auto-clear failed to remove %s: %s"
+                      % (out, e), file=sys.stderr)
+                sys.exit(1)
+            log("Auto-clear: removed file %s" % out)
+        else:
+            log("Auto-clear: %s did not exist, nothing to remove" % out)
+        os.makedirs(out, exist_ok=True)
+
+
 def parse_args(argv=None):
     ap = argparse.ArgumentParser(
         description="Run Bingrong Ch.4 Tests 1-6 in parallel sandboxes.")
@@ -1454,9 +1716,10 @@ def parse_args(argv=None):
     ap.add_argument("--data-dir", default="DTALite_Files",
                     help="read-only DTALite_Files source (default: "
                          "DTALite_Files)")
-    ap.add_argument("--gap-threshold", type=float, default=0.0001,
-                    help="UE relative gap convergence threshold (Test 4 only; "
-                         "default: 0.0001)")
+    ap.add_argument("--gap-threshold", type=float, default=0.001,
+                    help="UE relative gap convergence threshold (Test 4; "
+                         "the Test 5 UE sweep reuses Test 4's ue_routes.csv "
+                         "and so inherits this threshold; default: 0.001)")
     ap.add_argument("--network", default="siouxfalls",
                     choices=["siouxfalls", "baltimore"],
                     help="network: siouxfalls (default) or baltimore "
@@ -1466,15 +1729,6 @@ def parse_args(argv=None):
                     help="simulation engine: pysim (default) or dtalite "
                          "(dtalite runs the DTALite executable exactly as "
                          "before; pysim runs the Python port)")
-    ap.add_argument("--emission-mode", choices=["off", "approx", "full"],
-                    default=None,
-                    help="PySim emissions tier override (off=0, approx=1, "
-                         "full=2), applied to each staged DTASettings.txt "
-                         "copy; the source data dir is never modified. "
-                         "Default (flag omitted): leave DTASettings.txt "
-                         "as-is. PySim-only key: with --engine dtalite it "
-                         "is still applied to the staged copy, but "
-                         "DTALite.exe ignores it.")
     ap.add_argument("--results-dir", default="results",
                     help="output root (default: results)")
     ap.add_argument("--keep-temp", action="store_true",
@@ -1551,18 +1805,6 @@ def main(argv=None):
     os.makedirs(results_root, exist_ok=True)
     os.makedirs(temp_root, exist_ok=True)
 
-    # --emission-mode override (None = leave DTASettings.txt as-is).
-    # Applied in setup_sandbox to every staged copy, never the source.
-    emission_flag = (EMISSION_MODE_FLAGS[args.emission_mode]
-                     if args.emission_mode is not None else None)
-    if emission_flag is not None:
-        msg = ("Emission mode override: %s (flag %d) -- applied to every "
-               "staged DTASettings.txt; source data dir untouched"
-               % (args.emission_mode, emission_flag))
-        if args.engine == "dtalite":
-            msg += " (PySim-only key; DTALite.exe ignores it)"
-        log(msg)
-
     # Test 6 smart mode: fold missing prerequisites into the selection
     # BEFORE setup, so they run in Phase A like any other selected test.
     if 6 in tests:
@@ -1574,6 +1816,29 @@ def main(argv=None):
             log("Test 6: no usable results for test(s) %s -- running them "
                 "as prerequisites" % prereqs)
             tests = sorted(set(tests) | set(prereqs))
+
+    # Auto-clear: delete + recreate ONLY the results dirs of the tests
+    # about to run, so stale files from a partial/failed run can never
+    # survive into this run's tables. Placed AFTER the Test 6 prereq
+    # fold on purpose: clearing before the fold would make
+    # results_exist() false for every test and turn a bare --tests 6
+    # analysis run into a full rerun. Tests 1-4 are therefore cleared
+    # only when they are in `tests` (selected, or folded in as a
+    # missing prerequisite); a bare --tests 6 run clears test6/ only.
+    # Test 4 as a Test 5-only dependency (4 not in `tests`) is not
+    # cleared: its existing ue_routes.csv is the 5U sweep's input.
+    auto_clear_results(results_root, tests)
+
+    # Run manifest (start): rewritten at run end with outcomes.
+    # Placed AFTER auto-clear on purpose: the manifest lives at the
+    # results root, which auto-clear never touches, and the start
+    # write must not precede the Test 6 prereq fold above (so the
+    # selected-tests list it records is final).
+    _run_started = time.time()
+    _run_cmdline = (" ".join(sys.argv) if argv is None
+                    else " ".join([sys.argv[0]] + list(argv)))
+    write_run_manifest(results_root, args, tests, data_dir, "started",
+                       None, None, None, _run_started, None, _run_cmdline)
 
     # Test 5 UE sweep needs its 8 scripts next to this file (the
     # UE-guidance trio plus the 5 v9 support scripts). Fail fast if
@@ -1606,8 +1871,7 @@ def main(argv=None):
                 "dependency before Phase A ...")
             try:
                 _sb_dep4 = setup_sandbox("test_dep4", data_dir, temp_root,
-                                         scripts_for_test(4),
-                                         emission_flag=emission_flag)
+                                         scripts_for_test(4))
             except Exception as e:
                 print("ERROR: sandbox setup failed for Test 4 dependency: %s"
                       % e, file=sys.stderr)
@@ -1676,19 +1940,16 @@ def main(argv=None):
         for t in tests:
             if t in (1, 2, 3, 4):
                 sandboxes[t] = setup_sandbox(
-                    "test_%d" % t, data_dir, temp_root, scripts_for_test(t),
-                    emission_flag=emission_flag)
+                    "test_%d" % t, data_dir, temp_root, scripts_for_test(t))
         if 5 in tests:
             sandboxes["5P"] = setup_sandbox(
-                "test_5P", data_dir, temp_root, scripts_for_sweep("P"),
-                emission_flag=emission_flag)
+                "test_5P", data_dir, temp_root, scripts_for_sweep("P"))
             # Set up 5U sandbox here too (not inside the executor) so a
             # startup failure is caught by the fail-fast handler above.
             # The 5U sweep itself is submitted in the executor below.
             if 4 not in tests and ue_routes_pre and os.path.isfile(ue_routes_pre):
                 _sb5u_pre = setup_sandbox(
-                    "test_5U", data_dir, temp_root, scripts_for_sweep("U"),
-                    emission_flag=emission_flag)
+                    "test_5U", data_dir, temp_root, scripts_for_sweep("U"))
                 shutil.copy2(ue_routes_pre,
                              os.path.join(_sb5u_pre, "ue_routes.csv"))
                 sandboxes["5U"] = _sb5u_pre
@@ -1782,8 +2043,7 @@ def main(argv=None):
             sweep_5u_started = True
             try:
                 sb5u = setup_sandbox("test_5U", data_dir, temp_root,
-                                     scripts_for_sweep("U"),
-                                     emission_flag=emission_flag)
+                                     scripts_for_sweep("U"))
             except Exception as e:
                 print("ERROR: sandbox setup failed for Test 5 UE sweep: %s"
                       % e, file=sys.stderr)
@@ -2053,6 +2313,17 @@ def main(argv=None):
         stop_event.set()
         display_thread.join(timeout=10)
 
+    # ---- Table 4 emissions (Tests 1-4) ----
+    # Collected-results only (no sandbox, no engine): runs once,
+    # after every collection and after Test 5 aggregation, so a
+    # full run always produces it. Partial runs write the rows
+    # whose source files exist and note the rest as missing.
+    if any(t in tests for t in (1, 2, 3, 4)):
+        try:
+            run_table4_emissions(results_root)
+        except Exception as e:
+            log("WARNING: Table 4 emissions failed: %s "
+                "(other results unaffected)" % e)
     print_summary(results_root, tests, outcomes, sweep_outcomes, agg_status)
     log("All done (%s total)" % fmt_min(time.time() - t_start))
 
@@ -2064,6 +2335,10 @@ def main(argv=None):
                 failed.append(t)
         elif not outcomes.get(t):
             failed.append(t)
+    _run_status = "failed" if failed else "completed"
+    write_run_manifest(results_root, args, tests, data_dir, _run_status,
+                       outcomes, sweep_outcomes, agg_status,
+                       _run_started, time.time(), _run_cmdline)
     if failed:
         print("FAILED tests: %s" % failed, file=sys.stderr)
         sys.exit(1)

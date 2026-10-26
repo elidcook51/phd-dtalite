@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """Test 6: Future Traffic Conditions Estimation.
 
-Compares predicted vs actual link volumes for the Proposed system (Test 1)
-and bins the per-link volume discrepancy the way Bingrong's Chapter 4
-Figure 8 does.
+Compares predicted vs actual link volumes for Tests 1-4 and bins the
+per-link volume discrepancy the way Bingrong's Chapter 4 Figure 8 does.
+
+Pairs: Test 1 pairs the bigloop-prefixed *predict_LinkMOE.csv /
+*actual_LinkMOE.csv files in test1/full_results/. Tests 2-4 pair
+testN/predicted_LinkMOE.csv (saved by the guidance scenario run:
+scenarios_realtime.py Step 1 for Tests 2/3, scenarios_ue.py final MSA
+iteration for Test 4) against the reaction run's output_LinkMOE.csv,
+which wholerunner's collect_234() copies to testN/full_results/.
+Both engines write the same LinkMOE columns (PySim's writer reproduces
+the DTALite header), so one loader serves both.
 
 Inputs are DTALite LinkMOE CSVs. Their header row repeats
 from_node_id,to_node_id (a trailing-comma quirk from the exe output), so
@@ -28,13 +36,23 @@ REQUIRED_COLUMNS = ("from_node_id", "to_node_id", "total_link_volume")
 BINS = ("<10%", "10-20%", "20-50%", "50-100%", ">100%")
 UNDEFINED_BIN = "undefined"
 
-# Systems whose guidance-run / intermediate link volumes the pipeline does
-# not persist, so no predicted-vs-actual comparison is possible for them.
+# Legacy system names whose guidance-run / intermediate link volumes the
+# pipeline does not persist, so no predicted-vs-actual comparison is
+# possible for them. Tests 2-4 are NOT in this dict: their predicted
+# LinkMOE files are saved by the scenario scripts and their actual
+# LinkMOE files by the reaction run (see analyze_scenario).
 SKIP_REASONS = {
     "realtime_1": "guidance-run link volumes overwritten, not persisted",
     "realtime_10": "guidance-run link volumes overwritten, not persisted",
     "ue_baseline": "final MSA iteration link flows overwritten, not persisted",
 }
+
+# Actual-LinkMOE candidates for Tests 2-4, in priority order. The first is
+# what wholerunner's collect_234() produces (the reaction run's
+# output_LinkMOE.csv copied into full_results/); the second covers
+# hand-assembled results dirs where the file sits directly under testN/.
+SCENARIO_ACTUAL_CANDIDATES = ("full_results/output_LinkMOE.csv",
+                              "output_LinkMOE.csv")
 
 
 def warn(msg):
@@ -58,10 +76,13 @@ def load_link_volumes(path):
         col = {}
         for row in reader:
             if not col:
+                # Header names are matched case- and whitespace-insensitively
+                # (DTALite pads some names, e.g. " speed_limit"; PySim
+                # reproduces the same header, so both engines land here).
                 for i, name in enumerate(row):
-                    name = name.strip()
-                    if name and name not in col:
-                        col[name] = i
+                    norm = name.strip().lower()
+                    if norm and norm not in col:
+                        col[norm] = i
                 missing = [c for c in REQUIRED_COLUMNS if c not in col]
                 if missing:
                     raise ValueError(
@@ -125,40 +146,28 @@ def bin_for(discrepancy_pct):
     return ">100%"
 
 
-def analyze_proposed(results_dir):
-    """Analyze the Proposed system. Returns a result dict, or None if skipped."""
-    full_output = os.path.join(results_dir, "test1", "full_results")
-    if not os.path.isdir(full_output):
-        warn("proposed: directory not found: %s -- skipping" % full_output)
-        return None
+def analyze_pair(system, predict_path, actual_path, bigloop=None):
+    """Shared predicted-vs-actual binning for one system.
 
-    found = find_proposed_pair(full_output)
-    if found is None:
-        has_predict = glob.glob(os.path.join(full_output, "*" + PREDICT_SUFFIX))
-        has_actual = glob.glob(os.path.join(full_output, "*" + ACTUAL_SUFFIX))
-        if has_predict and not has_actual:
-            warn("proposed: found *%s but no matching *%s -- skipping"
-                 % (PREDICT_SUFFIX, ACTUAL_SUFFIX))
-        elif has_actual and not has_predict:
-            warn("proposed: found *%s but no matching *%s -- skipping"
-                 % (ACTUAL_SUFFIX, PREDICT_SUFFIX))
-        else:
-            warn("proposed: no *%s / *%s files in %s -- skipping"
-                 % (PREDICT_SUFFIX, ACTUAL_SUFFIX, full_output))
-        return None
-
-    prefix, predict_path, actual_path = found
-    info("proposed: using %s and %s"
-         % (os.path.basename(predict_path), os.path.basename(actual_path)))
+    Raises ValueError (bad/mismatched columns, e.g. a Test 4 predicted
+    file that is really a LinkTDMOE fallback copy, which has no
+    total_link_volume column) or OSError (unreadable file); callers turn
+    those into a skipped system, never a crashed run.
+    """
+    info("%s: using %s and %s"
+         % (system, os.path.basename(predict_path),
+            os.path.basename(actual_path)))
 
     predicted = load_link_volumes(predict_path)
     actual = load_link_volumes(actual_path)
 
     common = set(predicted) & set(actual)
     for key in sorted(set(predicted) - set(actual)):
-        warn("proposed: link %s->%s in predicted but not in actual -- dropped" % key)
+        warn("%s: link %s->%s in predicted but not in actual -- dropped"
+             % (system, key[0], key[1]))
     for key in sorted(set(actual) - set(predicted)):
-        warn("proposed: link %s->%s in actual but not in predicted -- dropped" % key)
+        warn("%s: link %s->%s in actual but not in predicted -- dropped"
+             % (system, key[0], key[1]))
 
     rows = []
     bin_counts = {b: 0 for b in BINS}
@@ -176,13 +185,75 @@ def analyze_proposed(results_dir):
         rows.append((key[0], key[1], pred_raw, act_raw, "%.2f" % disc, b))
 
     return {
-        "system": "test1",
-        "bigloop": prefix if prefix else None,
+        "system": system,
+        "bigloop": bigloop,
         "rows": rows,
         "bins": bin_counts,
         "undefined": undefined,
         "total": len(rows),
     }
+
+
+def analyze_proposed(results_dir):
+    """Analyze the Proposed system (Test 1). Returns a result dict,
+    or None if skipped."""
+    full_output = os.path.join(results_dir, "test1", "full_results")
+    if not os.path.isdir(full_output):
+        warn("test1: directory not found: %s -- skipping" % full_output)
+        return None
+
+    found = find_proposed_pair(full_output)
+    if found is None:
+        has_predict = glob.glob(os.path.join(full_output, "*" + PREDICT_SUFFIX))
+        has_actual = glob.glob(os.path.join(full_output, "*" + ACTUAL_SUFFIX))
+        if has_predict and not has_actual:
+            warn("test1: found *%s but no matching *%s -- skipping"
+                 % (PREDICT_SUFFIX, ACTUAL_SUFFIX))
+        elif has_actual and not has_predict:
+            warn("test1: found *%s but no matching *%s -- skipping"
+                 % (ACTUAL_SUFFIX, PREDICT_SUFFIX))
+        else:
+            warn("test1: no *%s / *%s files in %s -- skipping"
+                 % (PREDICT_SUFFIX, ACTUAL_SUFFIX, full_output))
+        return None
+
+    prefix, predict_path, actual_path = found
+    return analyze_pair("test1", predict_path, actual_path,
+                        bigloop=prefix if prefix else None)
+
+
+def analyze_scenario(results_dir, system):
+    """Analyze Test 2, 3, or 4. Returns a result dict, or None if skipped.
+
+    Predicted: testN/predicted_LinkMOE.csv, saved by the guidance run
+    (scenarios_realtime.py Step 1 output_LinkMOE.csv for Tests 2/3;
+    scenarios_ue.py final-MSA-iteration output_LinkMOE.csv for Test 4).
+    Actual: the reaction run's output_LinkMOE.csv, which collect_234()
+    copies to testN/full_results/ (fallback: testN/output_LinkMOE.csv).
+    The reaction run is the last engine run in the sandbox, so that file
+    is the actual-traffic volumes, not the guidance volumes.
+    """
+    test_dir = os.path.join(results_dir, system)
+    predict_path = os.path.join(test_dir, "predicted_LinkMOE.csv")
+    actual_path = None
+    for cand in SCENARIO_ACTUAL_CANDIDATES:
+        candidate = os.path.join(test_dir, cand)
+        if os.path.isfile(candidate):
+            actual_path = candidate
+            break
+    if not os.path.isfile(predict_path) and actual_path is None:
+        warn("%s: no predicted_LinkMOE.csv and no actual LinkMOE file "
+             "in %s -- skipping" % (system, test_dir))
+        return None
+    if not os.path.isfile(predict_path):
+        warn("%s: no predicted_LinkMOE.csv in %s -- skipping"
+             % (system, test_dir))
+        return None
+    if actual_path is None:
+        warn("%s: no actual LinkMOE file (%s) in %s -- skipping"
+             % (system, " or ".join(SCENARIO_ACTUAL_CANDIDATES), test_dir))
+        return None
+    return analyze_pair(system, predict_path, actual_path)
 
 
 def write_csv(path, analyzed):
@@ -212,6 +283,10 @@ def write_summary(path, analyzed, skipped):
             lines.append("     %-8s: %d links" % (b, res["bins"][b]))
         lines.append("     Undefined (zero actual volume): %d links"
                      % res["undefined"])
+        within = res["bins"]["<10%"]
+        pct = (100.0 * within / res["total"]) if res["total"] else 0.0
+        lines.append("     Within 10%%: %d links (%.1f%% of links analyzed)"
+                     % (within, pct))
         lines.append("")
     if skipped:
         lines.append("   Systems skipped (predicted volumes not saved):")
@@ -252,17 +327,30 @@ def main(argv=None):
     analyzed = []
     skipped = []
     for system in systems:
-        if system in ("proposed", "test1"):  # "proposed" kept as a standalone alias
-            res = analyze_proposed(results_dir)
-            if res is None:
-                skipped.append((system, "predicted/actual LinkMOE pair not found"))
+        try:
+            if system in ("proposed", "test1"):  # "proposed" kept as a standalone alias
+                res = analyze_proposed(results_dir)
+                if res is None:
+                    skipped.append((system, "predicted/actual LinkMOE pair not found"))
+                else:
+                    analyzed.append(res)
+            elif system in ("test2", "test3", "test4"):
+                res = analyze_scenario(results_dir, system)
+                if res is None:
+                    skipped.append((system, "predicted/actual LinkMOE pair not found"))
+                else:
+                    analyzed.append(res)
             else:
-                analyzed.append(res)
-        else:
-            reason = SKIP_REASONS.get(system, "predicted link volumes not available")
-            warn("Predicted link volumes not saved for %s -- skipping. (%s.)"
-                 % (system, reason))
-            skipped.append((system, reason))
+                reason = SKIP_REASONS.get(system, "predicted link volumes not available")
+                warn("Predicted link volumes not saved for %s -- skipping. (%s.)"
+                     % (system, reason))
+                skipped.append((system, reason))
+        except (ValueError, OSError) as e:
+            # One bad pair (e.g. a TDMOE-shaped predicted file, or an
+            # unreadable file) skips that system only; the other systems
+            # still get analyzed.
+            warn("%s: %s -- skipping" % (system, e))
+            skipped.append((system, str(e)))
 
     csv_path = os.path.join(output_dir, "volume_estimation.csv")
     summary_path = os.path.join(output_dir, "volume_estimation_summary.txt")

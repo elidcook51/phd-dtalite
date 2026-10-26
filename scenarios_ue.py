@@ -15,7 +15,7 @@ Sun's 2018 dissertation (Chapter 4, Test 4; after Sheffi 1985):
           With n = 1 the first move uses alpha = 1.0.
   Step 4: re-simulate, recompute the relative gap
           (current_TT - shortest_TT) / shortest_TT, repeat until the gap
-          falls below 0.01% or the iteration cap is hit. The gap always
+          falls below 0.1% or the iteration cap is hit. The gap always
           uses FRESH link times from the just-finished DTALite run.
 
 Key assumption (dissertation, Chapter 4): the operator assumes ALL drivers
@@ -57,7 +57,7 @@ Merge notes (validator's verdict):
 
 Usage:
   python scenarios_ue.py --data-dir <sandbox> [--result-dir results/ue_baseline]
-                     [--seed 42] [--max-iters 50] [--gap-threshold 0.0001]
+                     [--seed 42] [--max-iters 50] [--gap-threshold 0.001]
                      [--choice-mat ...] [--demand-csv ...] [--network-xlsx ...]
                      [--exe ...] [--timeout 3600]
 """
@@ -661,7 +661,7 @@ def main(argv=None):
                         choices=["siouxfalls", "baltimore"],
                         help="network: siouxfalls (default) or baltimore")
     parser.add_argument("--max-iters", type=int, default=50)
-    parser.add_argument("--gap-threshold", type=float, default=0.0001)
+    parser.add_argument("--gap-threshold", type=float, default=0.001)
     parser.add_argument("--choice-mat", default=None)
     parser.add_argument("--demand-csv", default=None)
     parser.add_argument("--network-xlsx", default=None)
