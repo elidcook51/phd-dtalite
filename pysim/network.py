@@ -122,6 +122,10 @@ class Link:
         # with float arithmetic until the final division by the double 0.1
         self.backward_wave_steps = int(
             float(f32(f32(self.length / self.wave_speed) * f32(60))) / 0.1)
+        # Drop the previous list before building the new one: the old MOE
+        # values are dead at rebuild, and holding both lists at once
+        # doubles peak memory (one list per link per minute).
+        self.moe = None
         self.moe = [MinuteMOE() for _ in range(horizon + 1)]
         self.ring_arrival = [f32(0)] * 301
         self.ring_departure = [f32(0)] * 301
