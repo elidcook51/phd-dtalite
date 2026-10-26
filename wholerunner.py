@@ -557,11 +557,127 @@ def display_loop(tracker, keys, stop_event, interval=2.0):
 # ----------------------------------------------------------------------
 # Sandbox setup (fail-fast: any error here aborts before anything runs)
 # ----------------------------------------------------------------------
-def setup_sandbox(name, data_dir, temp_root, scripts):
+# PySim emissions tiers, as written to [emission] output_emission_data in
+# the staged DTASettings.txt: 0 = off, 1 = approx, 2 = full. The CLI flag
+# --emission-mode maps names to these values; None means no override.
+EMISSION_MODE_FLAGS = {"off": 0, "approx": 1, "full": 2}
+
+_EMISSION_KEY_RE = re.compile(rb"^\s*output_emission_data\s*=", re.IGNORECASE)
+_EMISSION_SECTION_RE = re.compile(rb"^\s*\[\s*emission\s*\]\s*$",
+                                   re.IGNORECASE)
+_SECTION_HEADER_RE = re.compile(rb"^\s*\[(.+?)\]\s*$")
+
+
+def _split_line_ending(line):
+    """Split a raw line into (content, ending); ending is b'\\r\\n',
+    b'\\n', b'\\r', or b'' for a final unterminated line."""
+    if line.endswith(b"\r\n"):
+        return line[:-2], b"\r\n"
+    if line.endswith(b"\n") or line.endswith(b"\r"):
+        return line[:-1], line[-1:]
+    return line, b""
+
+
+def read_emission_flag(settings_path):
+    """Value of [emission] output_emission_data in a DTASettings.txt, or
+    None if the file, the section, or the key is absent. Only the key
+    inside the [emission] section counts; the same key under another
+    section does not. Returns the raw value string (stripped)."""
+    if not os.path.isfile(settings_path):
+        return None
+    with open(settings_path, "rb") as f:
+        data = f.read()
+    in_emission = False
+    for raw in data.splitlines(keepends=True):
+        content, _ = _split_line_ending(raw)
+        if _SECTION_HEADER_RE.match(content):
+            in_emission = bool(_EMISSION_SECTION_RE.match(content))
+            continue
+        if in_emission and _EMISSION_KEY_RE.match(content):
+            return content.split(b"=", 1)[1].strip().decode("ascii", "replace")
+    return None
+
+
+def verify_emission_flag(settings_path, flag):
+    """Re-read settings_path and raise RuntimeError unless [emission]
+    output_emission_data equals flag. Fail loud, never silent."""
+    value = read_emission_flag(settings_path)
+    if value != str(flag):
+        raise RuntimeError(
+            "emission mode verification failed for %s: expected "
+            "output_emission_data=%s under [emission], found %r"
+            % (settings_path, flag, value))
+
+
+def apply_emission_mode(settings_path, flag):
+    """Write output_emission_data=<flag> into the [emission] section of
+    the STAGED settings file at settings_path (callers only ever pass
+    sandbox copies, never a source data dir). Line-based, not a
+    configparser round-trip, so comments, other settings, and per-line
+    endings survive. Handles: section+key present (replace the line),
+    section present/key absent (insert after the header), section
+    absent (append section + key), file missing (create it). Re-reads
+    and verifies afterwards; raises RuntimeError on mismatch."""
+    new_line = b"output_emission_data=" + str(flag).encode("ascii")
+    if os.path.isfile(settings_path):
+        with open(settings_path, "rb") as f:
+            lines = f.read().splitlines(keepends=True)
+    else:
+        lines = []
+    # Newline style for inserted lines: the file's first existing ending,
+    # else the platform default (only matters for a created file).
+    style = os.linesep.encode("ascii")
+    for raw in lines:
+        _, ending = _split_line_ending(raw)
+        if ending:
+            style = ending
+            break
+    out = []
+    in_emission = False
+    section_at = None
+    key_done = False
+    for raw in lines:
+        content, ending = _split_line_ending(raw)
+        if _SECTION_HEADER_RE.match(content):
+            in_emission = bool(_EMISSION_SECTION_RE.match(content))
+            if in_emission and section_at is None:
+                section_at = len(out)
+            out.append((content, ending))
+            continue
+        if in_emission and not key_done and _EMISSION_KEY_RE.match(content):
+            out.append((new_line, ending))
+            key_done = True
+            continue
+        out.append((content, ending))
+    if not key_done and section_at is not None:
+        # Section exists but no key: insert after its header. If the
+        # header was the unterminated last line, terminate it first.
+        content, ending = out[section_at]
+        if not ending:
+            out[section_at] = (content, style)
+        out.insert(section_at + 1, (new_line, style))
+        key_done = True
+    if not key_done:
+        # No [emission] section: append it. Terminate a trailing
+        # unterminated line first so the new section starts on its own line.
+        if out and not out[-1][1]:
+            content, _ = out[-1]
+            out[-1] = (content, style)
+        out.append((b"[emission]", style))
+        out.append((new_line, style))
+    with open(settings_path, "wb") as f:
+        for content, ending in out:
+            f.write(content + ending)
+    verify_emission_flag(settings_path, flag)
+
+
+def setup_sandbox(name, data_dir, temp_root, scripts, emission_flag=None):
     """Create temp/run_<pid>/<name>/ with a private DTALite_Files/ copy and
     the job's scripts. `scripts` is a list of (src_dir, filename) tuples;
     src_dir None means next to wholerunner.py, otherwise a subdir of HERE.
-    Raises on any error."""
+    emission_flag None leaves the staged DTASettings.txt untouched;
+    otherwise the [emission] tier is forced in the staged copy only (the
+    source data dir is never modified). Raises on any error."""
     sandbox = os.path.join(temp_root, name)
     if os.path.isdir(sandbox):
         log("removing stale sandbox %s" % sandbox)
@@ -571,6 +687,11 @@ def setup_sandbox(name, data_dir, temp_root, scripts):
     sandbox_data = os.path.join(sandbox, "DTALite_Files")
     log("%s: copying DTALite_Files -> sandbox ..." % name)
     shutil.copytree(data_dir, sandbox_data)
+    if emission_flag is not None:
+        apply_emission_mode(
+            os.path.join(sandbox_data, "DTASettings.txt"), emission_flag)
+        log("%s: emission mode override -> %d (staged DTASettings.txt only)"
+            % (name, emission_flag))
 
     for src_dir, fn in scripts:
         if src_dir:
@@ -1345,6 +1466,15 @@ def parse_args(argv=None):
                     help="simulation engine: pysim (default) or dtalite "
                          "(dtalite runs the DTALite executable exactly as "
                          "before; pysim runs the Python port)")
+    ap.add_argument("--emission-mode", choices=["off", "approx", "full"],
+                    default=None,
+                    help="PySim emissions tier override (off=0, approx=1, "
+                         "full=2), applied to each staged DTASettings.txt "
+                         "copy; the source data dir is never modified. "
+                         "Default (flag omitted): leave DTASettings.txt "
+                         "as-is. PySim-only key: with --engine dtalite it "
+                         "is still applied to the staged copy, but "
+                         "DTALite.exe ignores it.")
     ap.add_argument("--results-dir", default="results",
                     help="output root (default: results)")
     ap.add_argument("--keep-temp", action="store_true",
@@ -1421,6 +1551,18 @@ def main(argv=None):
     os.makedirs(results_root, exist_ok=True)
     os.makedirs(temp_root, exist_ok=True)
 
+    # --emission-mode override (None = leave DTASettings.txt as-is).
+    # Applied in setup_sandbox to every staged copy, never the source.
+    emission_flag = (EMISSION_MODE_FLAGS[args.emission_mode]
+                     if args.emission_mode is not None else None)
+    if emission_flag is not None:
+        msg = ("Emission mode override: %s (flag %d) -- applied to every "
+               "staged DTASettings.txt; source data dir untouched"
+               % (args.emission_mode, emission_flag))
+        if args.engine == "dtalite":
+            msg += " (PySim-only key; DTALite.exe ignores it)"
+        log(msg)
+
     # Test 6 smart mode: fold missing prerequisites into the selection
     # BEFORE setup, so they run in Phase A like any other selected test.
     if 6 in tests:
@@ -1464,7 +1606,8 @@ def main(argv=None):
                 "dependency before Phase A ...")
             try:
                 _sb_dep4 = setup_sandbox("test_dep4", data_dir, temp_root,
-                                         scripts_for_test(4))
+                                         scripts_for_test(4),
+                                         emission_flag=emission_flag)
             except Exception as e:
                 print("ERROR: sandbox setup failed for Test 4 dependency: %s"
                       % e, file=sys.stderr)
@@ -1533,16 +1676,19 @@ def main(argv=None):
         for t in tests:
             if t in (1, 2, 3, 4):
                 sandboxes[t] = setup_sandbox(
-                    "test_%d" % t, data_dir, temp_root, scripts_for_test(t))
+                    "test_%d" % t, data_dir, temp_root, scripts_for_test(t),
+                    emission_flag=emission_flag)
         if 5 in tests:
             sandboxes["5P"] = setup_sandbox(
-                "test_5P", data_dir, temp_root, scripts_for_sweep("P"))
+                "test_5P", data_dir, temp_root, scripts_for_sweep("P"),
+                emission_flag=emission_flag)
             # Set up 5U sandbox here too (not inside the executor) so a
             # startup failure is caught by the fail-fast handler above.
             # The 5U sweep itself is submitted in the executor below.
             if 4 not in tests and ue_routes_pre and os.path.isfile(ue_routes_pre):
                 _sb5u_pre = setup_sandbox(
-                    "test_5U", data_dir, temp_root, scripts_for_sweep("U"))
+                    "test_5U", data_dir, temp_root, scripts_for_sweep("U"),
+                    emission_flag=emission_flag)
                 shutil.copy2(ue_routes_pre,
                              os.path.join(_sb5u_pre, "ue_routes.csv"))
                 sandboxes["5U"] = _sb5u_pre
@@ -1636,7 +1782,8 @@ def main(argv=None):
             sweep_5u_started = True
             try:
                 sb5u = setup_sandbox("test_5U", data_dir, temp_root,
-                                     scripts_for_sweep("U"))
+                                     scripts_for_sweep("U"),
+                                     emission_flag=emission_flag)
             except Exception as e:
                 print("ERROR: sandbox setup failed for Test 5 UE sweep: %s"
                       % e, file=sys.stderr)
