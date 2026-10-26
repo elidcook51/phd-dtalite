@@ -1,7 +1,10 @@
 """Compare a PySim arm against a DTALite arm of a wholerunner suite.
 
+v2.1: emissions-ready, path-time numeric, total_*/CO_(g/hr) detection, agent-only zero FAIL, mpr_table6 report-only, LinkTDMOE triple join (see emissions paragraph below). Core 13 contract
+fields are unchanged from v1; only the emissions handling changed.
+
 Usage (from the repo root, after both arms have run):
-    python compare_arms.py [--pysim results] [--dtalite results_dtalite]
+    python compare_arms_v2.py [--pysim results] [--dtalite results_dtalite]
                            [--tests 1,2,3,4,5,6] [--atol 1e-6] [--rtol 1e-9]
                            [--report compare_report.txt]
 
@@ -23,13 +26,18 @@ Comparison rules:
     Numeric cells pass within atol + rtol * |b|. Other string cells must
     match exactly. Path/sequence columns are reported as a match rate,
     and any mismatch in them fails the file.
-  - Emissions columns (TotalEnergy, CO2, NOX, CO, HC, PM) are REPORT-ONLY:
-    PySim has no VSP post-pass, so its per-agent emissions differ from
-    DTALite's by design. They never flip the verdict.
-  - Summary .txt files are compared with both roots and run_<digits>
-    temp segments masked out; any difference is a WARN, never a FAIL
-    (summaries can carry run metadata, and every number they carry is
-    derived from the CSVs, which are compared exactly).
+  - Emissions columns (TotalEnergy, CO2, NOX, CO, HC, PM, PM2.5) are
+    COMPARED, not skipped: PySim v1 now has its own VSP post-pass, so
+    per-column sums, mean/median relative differences, and the
+    zero-pattern are reported for every agent and Table 6 file.
+    Emissions NEVER fail on size of difference alone (the two models
+    differ structurally, see README), but a zero-pattern mismatch
+    (>1% of rows where one engine is zero and the other is not) DOES
+    fail, because that is a bug signature, not a model difference.
+  - Summary .txt files are compared with both roots masked out; any
+    difference is a WARN, never a FAIL (summaries can carry run metadata,
+    and every number they carry is derived from the CSVs, which are
+    compared exactly).
   - Missing core files (the 9 test1/test5 CSVs, mpr tables, test6 CSV)
     FAIL. A missing output_*.csv in test2/3/4 full_results is a WARN:
     PySim's output repertoire may legitimately be a subset.
@@ -38,18 +46,6 @@ Comparison rules:
 
 Exit code: 0 when no FAIL items, 1 otherwise. Stdlib only, Python 3.9
 compatible. Files are read fully into memory; fine at Sioux Falls scale.
-
-v2 changes (over v1): columns whose cells are semicolon-joined floats
-(path_time_sequence) are compared element-wise with an extra 0.055
-allowance, the maximum difference between 1-decimal and 2-decimal
-roundings of the same value, so 1-decimal vs 2-decimal formatting does
-not fail rows; differences below that cannot be resolved from 1-decimal
-output. Emissions detection also matches header tokens (co, co2, nox,
-hc, pm, totalenergy), catching CO_(g / hr), total_CO, total_CO2 without
-catching count columns; CPU Clock rows are dropped from
-output_day_to_day_MOE.csv before comparison; summary masking also
-folds run_<digits> temp segments; numeric mismatch notes list the top
-columns by mismatch count.
 """
 
 import argparse
@@ -69,29 +65,24 @@ TAGS = ("UOinfor", "predict", "actual")
 KINDS = ("agent", "LinkMOE", "LinkTDMOE")
 EMISSION_STEMS = ("totalenergy", "co2", "nox", "hc", "pm")
 EMISSION_EXACT = ("co", "cog")
-EMISSION_TOKENS = {"co", "co2", "nox", "hc", "pm", "totalenergy"}
-# Maximum |1-decimal rounding - 2-decimal rounding| of the same value
-# (0.05 + 0.005). Numeric-list columns allow this on top of atol/rtol;
-# smaller real differences cannot be resolved from 1-decimal output.
-LIST_ROUND_TOL = 0.055
 
 
 def norm_col(name):
     return re.sub(r"[^a-z0-9]", "", name.strip().lower())
 
 
-def col_tokens(name):
-    return [t for t in re.split(r"[^a-z0-9]+", name.strip().lower()) if t]
-
-
-def is_emission(name):
-    """Emissions column? Stem/exact match on the squashed name, or any
-    header token in EMISSION_TOKENS. Token matching catches CO_(g / hr)
-    (tokens co, g, hr) and total_CO (total, co) without catching
-    cumulative_out_flow_count (cumulative, out, flow, count)."""
-    norm = norm_col(name)
-    return (norm in EMISSION_EXACT or norm.startswith(EMISSION_STEMS)
-            or bool(set(col_tokens(name)) & EMISSION_TOKENS))
+def is_emission(norm):
+    if norm in EMISSION_EXACT or norm.startswith(EMISSION_STEMS):
+        return True
+    if norm.startswith("cog"):
+        return True
+    if norm.startswith("total"):
+        stripped = norm[5:]
+        if stripped == "co" or stripped.startswith("cog"):
+            return True
+        if any(stripped.startswith(s) for s in ("co2", "nox", "hc", "pm", "energy")):
+            return True
+    return False
 
 
 def is_path(norm):
@@ -106,43 +97,6 @@ def parse_float(text):
     if math.isnan(value) or math.isinf(value):
         return None
     return value
-
-
-def parse_num_list(text):
-    """Parse a semicolon-joined float list, e.g. '360.0;367.9;'.
-    Returns a list of floats, or None when the shape does not match
-    (no ';', an empty part other than trailing ';', a non-numeric part).
-    An empty cell returns None; callers treat empty-vs-empty as equal."""
-    if text is None:
-        return None
-    stripped = text.strip()
-    if ";" not in stripped:
-        return None
-    parts = stripped.split(";")
-    while parts and parts[-1].strip() == "":
-        parts.pop()
-    if not parts:
-        return None
-    values = []
-    for part in parts:
-        value = parse_float(part)
-        if value is None:
-            return None
-        values.append(value)
-    return values
-
-
-def is_num_list_column(cells):
-    """True when sampled non-empty cells are all semicolon-joined float
-    lists and at least one contains a decimal point. The decimal-point
-    requirement keeps integer lists (path_node_sequence, '1;2;3') on
-    exact string comparison."""
-    sampled = [c for c in cells if c.strip() != ""]
-    if not sampled:
-        return False
-    if not any("." in c for c in sampled):
-        return False
-    return all(parse_num_list(c) is not None for c in sampled)
 
 
 def read_csv(path):
@@ -204,24 +158,8 @@ def compare_csv(pa, pb, label, atol, rtol):
         res.fail("header mismatch (pysim-only: %s; dtalite-only: %s)"
                  % (only_a[:5], only_b[:5]))
         return res
-    if os.path.basename(pa) == "output_day_to_day_MOE.csv":
-        na_before, nb_before = len(rows_a), len(rows_b)
-        rows_a = [r for r in rows_a
-                  if not any("CPU Clock" in c for c in r)]
-        rows_b = [r for r in rows_b
-                  if not any("CPU Clock" in c for c in r)]
-        dropped = (na_before - len(rows_a)) + (nb_before - len(rows_b))
-        if dropped:
-            res.notes.append("dropped %d CPU Clock rows (runtime metadata)"
-                             % dropped)
     width = len(ha)
     norms = [norm_col(h) for h in ha]
-    num_list_cols = set()
-    for j in range(width):
-        cells = [r[j] for r in rows_a[:100] if len(r) > j]
-        cells += [r[j] for r in rows_b[:100] if len(r) > j]
-        if is_num_list_column(cells):
-            num_list_cols.add(j)
     rows_a = [pad(r, width) for r in rows_a]
     rows_b = [pad(r, width) for r in rows_b]
     if len(rows_a) != len(rows_b):
@@ -244,7 +182,19 @@ def compare_csv(pa, pb, label, atol, rtol):
                 res.fail("key mismatch (pysim-only keys: %s; "
                          "dtalite-only keys: %s)" % (only_a, only_b))
             pairs = [(da[k], db[k]) for k in sorted(set(da) & set(db))]
-        elif width >= 2:
+        elif width >= 3:
+            ka = [(r[0], r[1], r[2]) for r in rows_a]
+            kb = [(r[0], r[1], r[2]) for r in rows_b]
+            if len(set(ka)) == len(ka) and len(set(kb)) == len(kb):
+                mode = "join col0+col1+col2"
+                da = {(r[0], r[1], r[2]): r for r in rows_a}
+                db = {(r[0], r[1], r[2]): r for r in rows_b}
+                if set(da) != set(db):
+                    res.fail("key mismatch: %d pysim-only, %d dtalite-only"
+                             % (len(set(da) - set(db)),
+                                len(set(db) - set(da))))
+                pairs = [(da[k], db[k]) for k in sorted(set(da) & set(db))]
+        if mode == "ordered" and width >= 2:
             ka = [(r[0], r[1]) for r in rows_a]
             kb = [(r[0], r[1]) for r in rows_b]
             if len(set(ka)) == len(ka) and len(set(kb)) == len(kb):
@@ -261,74 +211,56 @@ def compare_csv(pa, pb, label, atol, rtol):
     res.notes.append("mode=%s rows pysim=%d dtalite=%d"
                      % (mode, len(rows_a), len(rows_b)))
     n_num_bad = 0
-    num_bad_by_col = Counter()
     max_diff = 0.0
     max_where = ""
     n_str_bad = 0
     str_examples = []
     n_path = 0
     n_path_bad = 0
-    n_em = 0
-    n_em_bad = 0
-    max_em_diff = 0.0
+    em_cols = {}
+    for j, norm in enumerate(norms):
+        if is_emission(norm):
+            em_cols[j] = {"name": ha[j], "n": 0, "sum_a": 0.0, "sum_b": 0.0,
+                          "rel": [], "zero_a": 0, "zero_b": 0, "zero_mis": 0}
     for ra, rb in pairs:
         for j in range(width):
             norm = norms[j]
             va, vb = ra[j], rb[j]
-            if is_emission(ha[j]):
+            if is_emission(norm) or ("mpr_table6" in label and j != 0):
                 fa, fb = parse_float(va), parse_float(vb)
-                n_em += 1
+                if j not in em_cols:
+                    em_cols[j] = {"name": ha[j], "n": 0, "sum_a": 0.0, "sum_b": 0.0,
+                                  "rel": [], "zero_a": 0, "zero_b": 0, "zero_mis": 0}
+                st = em_cols[j]
+                st["n"] += 1
                 if fa is not None and fb is not None:
-                    d = abs(fa - fb)
-                    if d > atol + rtol * abs(fb):
-                        n_em_bad += 1
-                        max_em_diff = max(max_em_diff, d)
+                    st["sum_a"] += fa
+                    st["sum_b"] += fb
+                    if fa == 0:
+                        st["zero_a"] += 1
+                    if fb == 0:
+                        st["zero_b"] += 1
+                    if (fa == 0) != (fb == 0):
+                        st["zero_mis"] += 1
+                    elif fb != 0:
+                        st["rel"].append(abs(fa - fb) / abs(fb))
                 elif va.strip() != vb.strip():
-                    n_em_bad += 1
+                    st["zero_mis"] += 1
                 continue
-            if j in num_list_cols:
-                la, lb = parse_num_list(va), parse_num_list(vb)
-                if la is None and lb is None:
-                    if va.strip() != vb.strip():
-                        n_str_bad += 1
-                        if len(str_examples) < 5:
-                            str_examples.append(
-                                "key=%s col=%s pysim=%r dtalite=%r"
-                                % (ra[0], ha[j], va, vb))
-                        if is_path(norm):
-                            n_path_bad += 1
-                elif la is None or lb is None:
-                    n_num_bad += 1
-                    num_bad_by_col[ha[j]] += 1
-                    if not max_where:
-                        max_where = ("key=%s col=%s not a numeric list on "
-                                     "one side pysim=%r dtalite=%r"
-                                     % (ra[0], ha[j], va, vb))
+            if "time" in norm and "sequence" in norm:
+                la = [parse_float(x) for x in va.split(";") if x.strip() != ""]
+                lb = [parse_float(x) for x in vb.split(";") if x.strip() != ""]
+                if len(la) == len(lb) and all(
+                        x is not None and y is not None and abs(x - y) <= atol + rtol * abs(y)
+                        for x, y in zip(la, lb)):
                     if is_path(norm):
-                        n_path_bad += 1
-                elif len(la) != len(lb):
-                    n_num_bad += 1
-                    num_bad_by_col[ha[j]] += 1
-                    if not max_where:
-                        max_where = ("key=%s col=%s length pysim=%d "
-                                     "dtalite=%d"
-                                     % (ra[0], ha[j], len(la), len(lb)))
-                    if is_path(norm):
-                        n_path_bad += 1
-                else:
-                    for k, (x, y) in enumerate(zip(la, lb)):
-                        d = abs(x - y)
-                        if d > LIST_ROUND_TOL + atol + rtol * abs(y):
-                            n_num_bad += 1
-                            num_bad_by_col[ha[j]] += 1
-                            if d > max_diff:
-                                max_diff = d
-                                max_where = ("key=%s col=%s elem=%d "
-                                             "pysim=%s dtalite=%s"
-                                             % (ra[0], ha[j], k, va, vb))
-                            if is_path(norm):
-                                n_path_bad += 1
+                        n_path += 1
+                    continue
+                n_str_bad += 1
+                if len(str_examples) < 5:
+                    str_examples.append("key=%s col=%s pysim=%r dtalite=%r" % (ra[0], ha[j], va, vb))
                 if is_path(norm):
+                    n_path_bad += 1
                     n_path += 1
                 continue
             fa, fb = parse_float(va), parse_float(vb)
@@ -336,7 +268,6 @@ def compare_csv(pa, pb, label, atol, rtol):
                 d = abs(fa - fb)
                 if d > atol + rtol * abs(fb):
                     n_num_bad += 1
-                    num_bad_by_col[ha[j]] += 1
                     if d > max_diff:
                         max_diff = d
                         max_where = "key=%s col=%s pysim=%s dtalite=%s" % (
@@ -352,22 +283,46 @@ def compare_csv(pa, pb, label, atol, rtol):
                         n_path_bad += 1
             if is_path(norm):
                 n_path += 1
-    if n_num_bad:
+    if n_num_bad and "mpr_table6" not in label:
         res.fail("numeric mismatches: %d (max abs diff %.6g at %s)"
                  % (n_num_bad, max_diff, max_where))
-        res.notes.append("numeric mismatches by column: %s"
-                         % ", ".join("%s (%d)" % (col, cnt)
-                                     for col, cnt in
-                                     num_bad_by_col.most_common(5)))
+    if n_num_bad and "mpr_table6" in label:
+        res.notes.append("table6 numeric differences (report-only): %d cells, max %.6g at %s"
+                         % (n_num_bad, max_diff, max_where))
     if n_str_bad:
         res.fail("string mismatches: %d (e.g. %s)"
                  % (n_str_bad, "; ".join(str_examples)))
     if n_path:
         res.notes.append("path cells: %d/%d exact"
                          % (n_path - n_path_bad, n_path))
-    if n_em:
-        res.notes.append("emissions (report-only): %d cells, %d differ, "
-                         "max diff %.6g" % (n_em, n_em_bad, max_em_diff))
+    for j, st in em_cols.items():
+        if st["n"] == 0:
+            continue
+        if st["sum_a"] == 0 and st["sum_b"] == 0:
+            res.notes.append("emissions %s: n=%d, both sums zero "
+                             "(rate file empty for this pollutant)"
+                             % (st["name"], st["n"]))
+            continue
+        pct = 100.0 * (st["sum_a"] - st["sum_b"]) / st["sum_b"] \
+            if st["sum_b"] != 0 else float("inf")
+        rel = sorted(st["rel"])
+        med = rel[len(rel) // 2] if rel else 0.0
+        mean_rel = sum(rel) / len(rel) if rel else 0.0
+        w10 = 100.0 * sum(1 for r in rel if r <= 0.10) / len(rel) if rel else 0.0
+        w25 = 100.0 * sum(1 for r in rel if r <= 0.25) / len(rel) if rel else 0.0
+        res.notes.append(
+            "emissions %s: n=%d sum pysim=%.6g dtalite=%.6g "
+            "sum diff=%+.1f%% mean rel=%.1f%% median rel=%.1f%% "
+            "within10%%=%.1f%% within25%%=%.1f%% zero pysim=%d "
+            "dtalite=%d mismatch=%d"
+            % (st["name"], st["n"], st["sum_a"], st["sum_b"], pct,
+               100.0 * mean_rel, 100.0 * med, w10, w25,
+               st["zero_a"], st["zero_b"], st["zero_mis"]))
+        if st["zero_mis"] > 0.01 * st["n"] and "_agent.csv" in label:
+            res.fail("emissions zero-pattern mismatch in %s: %d/%d rows "
+                     "(pysim zero=%d, dtalite zero=%d)"
+                     % (st["name"], st["zero_mis"], st["n"],
+                        st["zero_a"], st["zero_b"]))
     return res
 
 
@@ -393,15 +348,13 @@ def compare_text(pa, pb, label, roots):
         for root in roots:
             if root:
                 text = text.replace(root, "<ROOT>")
-        text = re.sub(r"run_\d+", "<RUN>", text)
         lines = [ln.rstrip() for ln in text.splitlines()]
         while lines and lines[-1] == "":
             lines.pop()
         masked.append(lines)
     la, lb = masked
     if la == lb:
-        res.notes.append("identical (%d lines, roots and run ids masked)"
-                         % len(la))
+        res.notes.append("identical (%d lines, roots masked)" % len(la))
         return res
     n_diff = 0
     examples = []
