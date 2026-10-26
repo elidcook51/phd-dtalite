@@ -162,7 +162,9 @@ class Vehicle:
         "demand_type", "vehicle_type", "pce", "info_type", "vot", "age",
         "toll", "distance", "trip_fftt", "delay", "node_size", "link_ary",
         "original_link_ary", "original_node_size", "loaded", "complete",
-        "sim_link_seq", "leaving_buffer_time", "time_to_retrieve_info", "co")
+        "sim_link_seq", "leaving_buffer_time", "time_to_retrieve_info", "co",
+        "em_energy", "em_co2", "em_nox", "em_co", "em_hc", "em_pm",
+        "em_pm25")
 
     def __init__(self, agent_id):
         self.agent_id = agent_id
@@ -193,6 +195,13 @@ class Vehicle:
         self.original_link_ary = None
         self.original_node_size = 0
         self.co = f32(0)
+        self.em_energy = 0.0
+        self.em_co2 = 0.0
+        self.em_nox = 0.0
+        self.em_co = 0.0
+        self.em_hc = 0.0
+        self.em_pm = 0.0
+        self.em_pm25 = 0.0
         self.loaded = False
         self.complete = False
         self.sim_link_seq = 0
@@ -207,6 +216,45 @@ class DemandType:
         self.avg_vot = f32(10)
         # cumulative percentages for info classes 0..3 (DTALite.cpp:2030-2070)
         self.cum_info_pct = [0.0, 0.0, 0.0, 0.0]
+
+
+def _resolve_emission_mode(ini, input_dir):
+    # Returns (mode, flag, source). A present key must be exactly 0, 1
+    # or 2; anything else fails loud instead of silently falling back
+    # (IniFile.get_int would quietly return its default on bad text,
+    # so the raw value is parsed here, strictly: optional sign plus
+    # digits only, so "1.0" and "2abc" are rejected, not truncated).
+    raw = ini.values.get(("emission", "output_emission_data"))
+    if raw is not None:
+        text = raw.strip()
+        digits = text[1:] if text[:1] in ("+", "-") else text
+        if not digits or not digits.isdigit():
+            raise ProgramStop(
+                "output_emission_data=%r is not an integer 0, 1 or 2"
+                % raw)
+        value = int(text)
+        if value == 0:
+            return "off", 0, "output_emission_data=0"
+        if value == 1:
+            return "approx", 1, "output_emission_data=1"
+        if value == 2:
+            return "full", 2, "output_emission_data=2"
+        raise ProgramStop(
+            "output_emission_data=%d is not 0 (off), 1 (approx) "
+            "or 2 (full)" % value)
+    # Key absent: the old get_int default of 1 made a settings-less run
+    # without a rate file hard-error, even though the user asked for
+    # nothing. The conditional default keeps every previously working
+    # run working (rate file present -> approx, as before) and turns
+    # only the old error case into an explicit, logged off run. An
+    # explicit 1 with no rate file still hard-errors in emissions.py.
+    rate_path = os.path.join(input_dir,
+                             "optional_vehicle_emission_rate.csv")
+    if os.path.exists(rate_path):
+        return ("approx", 1,
+                "default: output_emission_data absent, rate file present")
+    return ("off", 0,
+            "default: output_emission_data absent, no rate file")
 
 
 class World:
@@ -232,8 +280,21 @@ class World:
             "simulation", "use_point_queue_for_off_ramps", 1)
         self.info_updating_interval = ini.get_int(
             "traveler_information", "information_updating_interval_in_min", 1)
-        self.emission_output_flag = ini.get_int(
-            "emission", "output_emission_data", 1)
+        # Emission tier (see README_TIERS.md). One knob only:
+        # [emission] output_emission_data = 0 (off), 1 (approx),
+        # 2 (full). emission_output_flag keeps the same number for
+        # old readers; emission_mode is the source of truth.
+        self.emission_mode, self.emission_output_flag, \
+            self.emission_mode_source = _resolve_emission_mode(
+                ini, input_dir)
+        # Set by the post-pass that ran (approx or full); the agent
+        # writer uses em_* only when this is true, so a run can never
+        # silently print tally CO as VSP CO or vice versa.
+        self.emissions_computed = False
+        # Full-tier link tables, set by pysim/emissions_full.py (worker A)
+        # and read by the link writers; None in off/approx mode.
+        self.full_link_moe = None
+        self.full_link_tdmoe = None
         # scenario settings (g_DTALiteMultiScenarioMain, first scenario row)
         self.random_seed = 100
         self.num_iterations = 0  # TotalUEIterationNumber - 1

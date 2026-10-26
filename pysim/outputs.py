@@ -7,7 +7,7 @@
 # (StatisticsOutput.cpp:2056), OutputLinkMOEData (DTALite.cpp:3691) and
 # g_OutputLinkMOESummary (StatisticsOutput.cpp:1705). printf formats are
 # reproduced exactly; the LinkMOE summary uses iostream fixed precision 4.
-from .cpp import f32
+from .cpp import ProgramStop, f32
 
 AGENT_HEADER = (
     "agent_id,tour_id,dependency_agent_id,duration_in_min,following_agent_id,"
@@ -51,9 +51,71 @@ def _level_of_service(percentage):
     return "F"
 
 
+# Full-tier link values. Worker A (pysim/emissions_full.py) keys
+# full_link_moe by (from_node_number, to_node_number) and
+# full_link_tdmoe by (from_node_number, to_node_number, minute), each
+# value a dict of per-link totals (Energy in KJ, other gases in g) or
+# a 7-sequence in that order. Canonical keys are the short names;
+# the total_* spellings are accepted so a dict built with C++-style
+# names still wires up. Values are totals, NOT rates: see README_TIERS.
+_LINK_KEYS = ("energy", "co2", "nox", "co", "hc", "pm", "pm25")
+_LINK_ALIASES = {
+    "energy": ("Energy", "total_energy", "TotalEnergy", "TotalEnergy_(KJ)"),  # COORDINATOR MERGE FIX: worker A keys Energy, not TotalEnergy
+    "co2": ("total_co2", "total_CO2", "CO2"),
+    "nox": ("total_nox", "total_NOX", "NOX"),
+    "co": ("total_co", "total_CO", "CO"),
+    "hc": ("total_hc", "total_HC", "HC"),
+    "pm": ("total_pm", "total_PM", "PM"),
+    "pm25": ("total_pm25", "total_PM2.5", "PM2_5", "PM_2.5"),
+}
+
+
+def _link_value(row, name):
+    if isinstance(row, dict):
+        if name in row:
+            return float(row[name])
+        for alias in _LINK_ALIASES[name]:
+            if alias in row:
+                return float(row[alias])
+        return 0.0
+    return float(row[_LINK_KEYS.index(name)])
+
+
+def _full_link_row(world, table_attr, key):
+    # None in off/approx mode (caller already gated on full mode):
+    # a full run that reaches a link writer without its table has a
+    # broken post-pass, so fail loud instead of printing silent zeros.
+    # A missing link/minute key is different: an untraversed link or
+    # minute genuinely has no emissions, so it reads as 0.0.
+    table = getattr(world, table_attr, None)
+    if table is None:
+        raise ProgramStop(
+            "emission mode is full but world.%s was not set by "
+            "pysim/emissions_full.py" % table_attr)
+    row = table.get(key)
+    if row is None:
+        return (0.0,) * 7
+    return tuple(_link_value(row, name) for name in _LINK_KEYS)
+
+
+def _link_moe_emission_text(world, from_number, to_number):
+    # The 7 emission fields of a LinkMOE row, in header order. Full
+    # mode only: horizon totals from the post-pass. Off/approx keep
+    # the old seven 0.0000 fields exactly (approx is agent-only).
+    if getattr(world, "emission_mode", None) == "full":
+        vals = _full_link_row(world, "full_link_moe",
+                              (from_number, to_number))
+        return ",".join("%.4f" % v for v in vals) + ","
+    return "0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,"
+
+
 def write_agent_files(world, agent_path, trip_path):
     nodes = world.nodes
     links = world.links
+    # Agent emissions, when a post-pass ran for this load (approx or
+    # full). Otherwise the old behaviour is kept exactly: tally CO,
+    # zeros for the other pollutants.
+    use_vsp = bool(getattr(world, "emissions_computed", False))
     agent_lines = [AGENT_HEADER]
     trip_lines = [TRIP_HEADER]
     for agent_id in sorted(world.vehicles):
@@ -73,8 +135,14 @@ def write_agent_files(world, agent_path, trip_path):
                 f"{veh.demand_type},{veh.vehicle_type},{float(veh.pce):4.2f},"
                 f"{veh.info_type},{float(veh.vot):4.2f},"
                 f"{float(veh.toll):4.3f},{float(veh.distance):4.3f},"
-                f"{0.0:f},{0.0:f},{0.0:f},{float(veh.co):f},{0.0:f},"
-                f"{0.0:f},{0.0:f},{veh.age},{veh.node_size},")
+                f"{float(veh.em_energy) if use_vsp else 0.0:f},"
+                f"{float(veh.em_co2) if use_vsp else 0.0:f},"
+                f"{float(veh.em_nox) if use_vsp else 0.0:f},"
+                f"{float(veh.em_co) if use_vsp else float(veh.co):f},"
+                f"{float(veh.em_hc) if use_vsp else 0.0:f},"
+                f"{float(veh.em_pm) if use_vsp else 0.0:f},"
+                f"{float(veh.em_pm25) if use_vsp else 0.0:f},"
+                f"{veh.age},{veh.node_size},")
             # path node sequence, derived from the current link list
             node_numbers = [nodes[links[veh.link_ary[0].link_no].from_id]
                             .number]
@@ -108,17 +176,32 @@ def write_agent_files(world, agent_path, trip_path):
                 f"{veh.demand_type},{veh.info_type},{float(veh.vot):4.2f},"
                 f"{veh.vehicle_type},{veh.age},{float(veh.distance):4.2f},\n")
         else:
+            # Padded to the full 37-field header order (see note above):
+            # PCE after vehicle_type, PM/PM2.5 and vehicle_age after HC,
+            # then node_size, three empty path sequences, and the OD
+            # node coordinates, with the trailing comma the header has.
+            origin_node = nodes[veh.origin_node]
+            dest_node = nodes[veh.dest_node]
             agent_lines.append(
                 f"{veh.agent_id},{veh.tour_id},{veh.dependency_agent_id},"
                 f"{float(veh.duration):.0f},{veh.following_agent_id},"
                 f"{veh.origin_zone},{veh.dest_zone},{origin_number},"
                 f"{dest_number},{float(veh.departure):4.2f},"
                 f"{float(veh.arrival):4.2f},{flag},{0.0:4.2f},"
-                f"{veh.demand_type},{veh.vehicle_type},{veh.info_type},"
+                f"{veh.demand_type},{veh.vehicle_type},{float(veh.pce):4.2f},"
+                f"{veh.info_type},"
                 f"{float(veh.vot):4.2f},{float(veh.toll):4.3f},"
                 f"{float(veh.distance):4.3f},"
-                f"{0.0:f},{0.0:f},{0.0:f},{float(veh.co):f},{0.0:f},"
-                f"{veh.node_size}\n")
+                f"{float(veh.em_energy) if use_vsp else 0.0:f},"
+                f"{float(veh.em_co2) if use_vsp else 0.0:f},"
+                f"{float(veh.em_nox) if use_vsp else 0.0:f},"
+                f"{float(veh.em_co) if use_vsp else float(veh.co):f},"
+                f"{float(veh.em_hc) if use_vsp else 0.0:f},"
+                f"{float(veh.em_pm) if use_vsp else 0.0:f},"
+                f"{float(veh.em_pm25) if use_vsp else 0.0:f},"
+                f"{veh.age},{veh.node_size},,,,"
+                f"{origin_node.x:f},{origin_node.y:f},"
+                f"{dest_node.x:f},{dest_node.y:f},\n")
     with open(agent_path, "w", newline="", encoding="utf-8") as fh:
         fh.writelines(agent_lines)
     with open(trip_path, "w", newline="", encoding="utf-8") as fh:
@@ -149,6 +232,17 @@ def write_link_tdmoe(world, path, day_no=1):
                 density = (moe.cum_arrival - moe.cum_departure) * 1.0 / \
                     float(link.length) / max(1, link.inflow_lanes)
                 speed = world.link_speed(link, time)
+                # Full mode only: per-minute link totals from the
+                # post-pass, in header order. Off/approx keep the old
+                # zeros exactly (the approx post-pass is agent-only).
+                if getattr(world, "emission_mode", None) == "full":
+                    td = _full_link_row(
+                        world, "full_link_tdmoe",
+                        (from_number, to_number, time))
+                    em_text = ",".join("%f" % v for v in td) + ","
+                else:
+                    em_text = ("0.000000,0.000000,0.000000,0.000000,"
+                               "0.000000,0.000000,0.000000,")
                 lines.append(
                     f"{from_number},{to_number},{from_number}->{to_number},"
                     f"{day_no},{time},{float(travel_time):6.2f},"
@@ -158,9 +252,7 @@ def write_link_tdmoe(world, path, day_no=1):
                     f"{in_flow * 60.0:6.2f},{density:6.2f},"
                     f"{float(speed):3.2f},{float(f32(queue_ratio * f32(100))):3.2f},"
                     f"{moe.exit_queue_length:d},{moe.cum_arrival:d},"
-                    f"{moe.cum_departure:d}"
-                    ",0.000000,0.000000,0.000000,0.000000,0.000000,"
-                    "0.000000,0.000000,\n")
+                    f"{moe.cum_departure:d}," + em_text + "\n")
             time += aggregation
     with open(path, "w", newline="", encoding="utf-8") as fh:
         fh.writelines(lines)
@@ -196,6 +288,8 @@ def write_link_moe(world, path):
     header += "\n"
     lines = [header]
     for link in world.links:
+        from_number = world.nodes[link.from_id].number
+        to_number = world.nodes[link.to_id].number
         average_tt = world.travel_time_by_min(link, 0, world.horizon)
         speed = float(link.length) / max(0.00001, float(average_tt)) * 60
         capacity_horizon = float(link.lane_capacity) * link.outflow_lanes
@@ -216,7 +310,7 @@ def write_link_moe(world, path):
             f"{speed:.4f},{float(link.fftt):.4f},{float(average_tt):.4f},"
             f"{percentage},{_level_of_service(percentage)},0,0.0000,"
             f"{link.cflow_arrival},0.0000,0.0000,0.0000,"
-            f"0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,")
+            f"{_link_moe_emission_text(world, from_number, to_number)}")
         for dt in (1, 2, 3, 4):
             row += "%d," % link.counts_demand[dt]
         for vtype, name in world.vehicle_types_ordered:

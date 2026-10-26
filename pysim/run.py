@@ -1,6 +1,7 @@
 # Run one DTALite loading pass over an input directory, mirroring the exe
 # flow: settings -> scenario -> input files -> iteration-0 path assignment
-# (agent-based driver) -> network loading -> the three output files.
+# (agent-based driver) -> network loading -> emission post-pass (if any)
+# -> the three output files.
 import os
 import sys
 
@@ -25,6 +26,38 @@ def run_loading(input_dir, output_dir):
     sim = Simulator(world)
     sim.assign_paths_iteration_zero()
     sim.network_loading()
+    # Emission tier, resolved in World from output_emission_data
+    # (see README_TIERS.md). The line below is the run's tier record:
+    # a run can never silently be the wrong tier, because the mode and
+    # its source are printed here and stored on world.emission_mode.
+    print("pysim emission mode: %s (%s)"
+          % (world.emission_mode, world.emission_mode_source))
+    if world.emission_mode == "approx":
+        from .emissions import calculate_emissions
+        calculate_emissions(world)
+        world.emissions_computed = True
+    elif world.emission_mode == "full":
+        # Worker A module. Imported lazily so off/approx runs never
+        # need it, and a full run without it fails loud here instead
+        # of silently falling back to another tier.
+        try:
+            from .emissions_full import calculate_emissions_full
+        except ImportError as exc:
+            # Only the module itself missing means "not dropped in";
+            # an ImportError inside it is a real bug and re-raises.
+            if getattr(exc, "name", "") in ("pysim.emissions_full",
+                                            "emissions_full"):
+                raise ProgramStop(
+                    "emission mode is full but pysim/emissions_full.py "
+                    "is not present (worker A module not yet dropped "
+                    "in); refusing to fall back to approx or off")
+            raise
+        calculate_emissions_full(world)
+        if not getattr(world, "emissions_computed", False):
+            raise ProgramStop(
+                "pysim/emissions_full.py did not set "
+                "world.emissions_computed=True (contract breach); "
+                "refusing to write agent emissions from unset slots")
     os.makedirs(output_dir, exist_ok=True)
     write_agent_files(world,
                       os.path.join(output_dir, "output_agent.csv"),
