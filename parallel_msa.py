@@ -71,6 +71,7 @@ import warnings
 import msa as _msa_mod
 import assignment as _assignment_mod
 import realtimeassignment as _realtime_mod
+import engine as _engine_mod
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +91,15 @@ NETWORK_SOURCE_DIRS = {
 #: Sandbox folders are named ``Run0``, ``Run1``, ... under the repo root.
 SANDBOX_PREFIX = "Run"
 
+#: Files written by the pipeline that carry no per-iteration tag.  In the
+#: serial runner the final on-disk state of these is whatever the *last*
+#: iteration wrote, so the parallel orchestrator reproduces that by copying
+#: them back from the highest ``bigloop`` run only.
+SHARED_RESULT_NAMES = [
+    "UOinfor_agent.csv",
+    "UOinfor_LinkMOE.csv",
+    "UOinfor_LinkTDMOE.csv",
+]
 
 # A single bigloop that produces no result within this long is treated
 # as hung: fail with a clear error instead of blocking forever (which
@@ -144,11 +154,20 @@ def _result_names(bigloop):
     """Per-iteration result files produced for a given ``bigloop``."""
     i = bigloop
     return [
-    # v41: only the four paper-metric files are harvested (see README).
         f"{i}UOinfor_agent.csv",
+        f"{i}UOinfor_LinkMOE.csv",
+        f"{i}UOinfor_LinkTDMOE.csv",
+        f"{i}predict_agent.csv",
         f"{i}predict_LinkMOE.csv",
+        f"{i}predict_LinkTDMOE.csv",
         f"{i}actual_agent.csv",
         f"{i}actual_LinkMOE.csv",
+        f"{i}actual_LinkTDMOE.csv",
+        f"myfile{i}.mat",
+        f"pathinfo_ass{i}.mat",
+        f"pathinfo_comass{i}.mat",
+        f"pathinfo_comrealass{i}.mat",
+        f"pathinfo_realass{i}.mat",
     ]
 
 
@@ -202,7 +221,8 @@ def collect_results(run_dir, bigloop, dest_dir=SOURCE_DIR):
     Copy one iteration's result files from ``RunX/DTALite_Files/`` back to
     the real ``DTALite_Files/`` folder.
 
-    Files that were not produced are skipped with a warning.  Returns the list
+    Files that were not produced (e.g. ``pathinfo_ass{i}.mat`` is only
+    written for ``itr == 18``) are skipped with a warning.  Returns the list
     of files actually copied.
     """
     src_dir = os.path.join(os.path.abspath(run_dir), SOURCE_DIR)
@@ -221,6 +241,24 @@ def collect_results(run_dir, bigloop, dest_dir=SOURCE_DIR):
             )
     return copied
 
+
+def collect_shared_results(run_dir, dest_dir=SOURCE_DIR):
+    """
+    Copy the shared (non-iteration-tagged) result files back.  The
+    orchestrator calls this once, from the highest-``bigloop`` run, so the
+    final on-disk state matches a serial run.
+    """
+    src_dir = os.path.join(os.path.abspath(run_dir), SOURCE_DIR)
+    dest_dir = os.path.abspath(dest_dir)
+    os.makedirs(dest_dir, exist_ok=True)
+
+    copied = []
+    for name in SHARED_RESULT_NAMES:
+        src = os.path.join(src_dir, name)
+        if os.path.isfile(src):
+            shutil.copyfile(src, os.path.join(dest_dir, name))
+            copied.append(name)
+    return copied
 
 
 def cleanup_run_dir(run_dir):
@@ -249,7 +287,7 @@ def _sandbox_cwd(run_dir):
 
 def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
                  repo_root=None, keep_on_failure=True, cleanup=True,
-                 msa_fn=None, seed=1, network='siouxfalls'):
+                 msa_fn=None, seed=1, network='siouxfalls', engine=None):
     """
     Parallel-safe version of ``msa.msa``.
 
@@ -275,6 +313,7 @@ def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
     """
     run_id = bigloop if run_id is None else run_id
     repo_root = os.path.abspath(repo_root or os.getcwd())
+    _engine = _engine_mod.resolve(engine)
     source_dir = NETWORK_SOURCE_DIRS.get(network, SOURCE_DIR)
     # Match stage_run_dir fallback: if network dir missing, use DTALite_Files/
     if not os.path.isdir(os.path.join(repo_root, source_dir)):
@@ -295,7 +334,7 @@ def msa_parallel(bigloop, p, p_fix, p_realtime, run_id=None,
                 msa_fn(bigloop, p, p_fix, p_realtime)
             else:
                 _msa_mod.msa(bigloop, p, p_fix, p_realtime, seed=seed,
-                             network=network)
+                             network=network, engine=_engine)
 
         copied = collect_results(run_dir, bigloop, dest_dir=dest_dir)
     except Exception:
@@ -683,7 +722,7 @@ def _run_batch(task_list, max_workers, repo_root, msa_fn, seed,
 
 def run_parallel_msa(schedule, max_workers=None, repo_root=None,
                      keep_on_failure=True, msa_fn=None, seed=1,
-                     network='siouxfalls',
+                     network='siouxfalls', engine=None,
                      max_retries=MAX_RETRIES):
     """
     Run many MSA iterations concurrently, one sandbox (``RunX/``) per
@@ -758,6 +797,7 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
             "msa_fn": msa_fn,
             "seed": seed,
             "network": network,
+            "engine": engine,
         }
 
     schedule_tuples = list(schedule)
@@ -785,6 +825,18 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
         remaining = [s for s in schedule_tuples if s[0] in failed]
 
     # Shared result files from the highest *successful* bigloop, so the
+    # final on-disk state matches a serial run as closely as possible.
+    if all_ok:
+        last_ok = max(all_ok.values(), key=lambda r: r["bigloop"])
+        _sdir = NETWORK_SOURCE_DIRS.get(network, SOURCE_DIR)
+        if not os.path.isdir(os.path.join(repo_root, _sdir)):
+            _fb = os.path.join(repo_root, SOURCE_DIR)
+            if os.path.isdir(_fb):
+                _sdir = SOURCE_DIR
+        collect_shared_results(
+            sandbox_path(last_ok["run_id"], repo_root),
+            dest_dir=os.path.join(repo_root, _sdir),
+        )
 
     # Cleanup: delete sandboxes ONLY on full success. On any failure, keep
     # EVERYTHING -- disk is cheap, recompute is expensive, and the
@@ -807,4 +859,3 @@ def run_parallel_msa(schedule, max_workers=None, repo_root=None,
 
     return SweepResults([all_ok[bl] for bl in sorted(all_ok)],
                         failures=all_failed)
-

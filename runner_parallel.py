@@ -85,6 +85,10 @@ def main():
         "--network", default="siouxfalls", choices=["siouxfalls", "baltimore"],
         help="Network: siouxfalls (default) or baltimore.",
     )
+    parser.add_argument(
+        "--engine", default="pysim", choices=["pysim", "dtalite"],
+        help="Simulation engine: pysim (default) or dtalite.",
+    )
     args = parser.parse_args()
 
     try:
@@ -120,6 +124,7 @@ def main():
         keep_on_failure=not args.no_keep_on_failure,
         seed=args.seed,
         network=args.network,
+        engine=args.engine,
     )
     elapsed = time.time() - start
 

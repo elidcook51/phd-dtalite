@@ -97,6 +97,8 @@ import subprocess
 import sys
 
 import netconfig
+
+import engine as _engine_mod
 import numpy as np
 import pandas as pd
 import openpyxl
@@ -403,7 +405,7 @@ def read_choice_set(mat_path):
 # DTALite
 # ---------------------------------------------------------------------------
 
-def run_dtalite(data_dir, timeout=DTALITE_TIMEOUT_S):
+def run_dtalite(data_dir, timeout=DTALITE_TIMEOUT_S, engine=None):
     """Run DTALite once; fail fast with a clean error on any failure.
 
     The executable is verified BEFORE any stale output_* files are deleted,
@@ -411,6 +413,25 @@ def run_dtalite(data_dir, timeout=DTALITE_TIMEOUT_S):
     exit non-zero fall through to the next one (e.g. a non-zero wine exit
     does not preclude trying the native binary).
     """
+    _engine = _engine_mod.resolve(engine)
+    if _engine == "pysim":
+        # Verify the PySim runner exists BEFORE deleting stale outputs,
+        # mirroring the executable check below for the DTALite path.
+        try:
+            _engine_mod.pysim_command(data_dir)
+        except RuntimeError as exc:
+            raise ScenarioError(str(exc))
+        for name in sorted(os.listdir(data_dir)):
+            if name.startswith("output_"):
+                path = os.path.join(data_dir, name)
+                if os.path.isfile(path):  # never os.remove a directory
+                    os.remove(path)
+        try:
+            _engine_mod.run_pysim(data_dir, timeout, "scenarios_realtime")
+        except RuntimeError as exc:
+            raise ScenarioError(str(exc))
+        return
+
     # Verify an executable exists first; a missing-exe run must not
     # delete output_* files and then raise.
     exe_path = os.path.join(data_dir, "DTALite.exe")
@@ -770,6 +791,12 @@ def parse_args(argv=None):
         choices=["siouxfalls", "baltimore"],
         help="network: siouxfalls (default) or baltimore",
     )
+    parser.add_argument(
+        "--engine",
+        default="pysim",
+        choices=["pysim", "dtalite"],
+        help="simulation engine: pysim (default) or dtalite",
+    )
     args = parser.parse_args(argv)
     if not args.data_dir:
         parser.error("--data-dir is required: pass a writable sandbox copy of the DTALite inputs (DTALite_Files/ is read-only)")
@@ -830,7 +857,7 @@ def main(argv=None):
         {a: p[0] for a, p in ff_paths.items()},
     )
     print("step 1: running DTALite ...")
-    run_dtalite(data_dir)
+    run_dtalite(data_dir, engine=args.engine)
 
     tdmoe_path = os.path.join(data_dir, "output_LinkTDMOE.csv")
     tdmoe = read_ragged_csv(
@@ -879,7 +906,7 @@ def main(argv=None):
         {a: p[0] for a, p in rt_paths.items()},
     )
     print("step 2: running DTALite ...")
-    run_dtalite(data_dir)
+    run_dtalite(data_dir, engine=args.engine)
 
     vehicle_hours, n_simulated = read_vehicle_hours(
         os.path.join(data_dir, "output_agent.csv")

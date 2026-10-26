@@ -2,6 +2,8 @@ import numpy as np
 import warnings
 
 import netconfig
+
+import engine as _engine_mod
 # Suppress the divide-by-zero RuntimeWarning in the member utility tournament
 # (assignment.py bscale computation). meanstd2's std row has a zero at index 3;
 # MATLAB does the same division silently and gets Inf too -- behavior matches.
@@ -106,7 +108,7 @@ def sanitize_dtalite_csv(path):
 
     if changed:
 
-        with open(path, "w", newline="") as f:
+        with open(path, "w", newline="", encoding="utf-8") as f:
 
             csv.writer(f).writerows(fixed)
 
@@ -190,6 +192,15 @@ def _get_static_route_arrays(choiceset, row_idx, col_idx, link_lengths):
     return _static_route_cache
 
 
+def stringify_pathinfo_keys(d):
+    """Convert (route_row, route_col) tuple keys to strings for savemat.
+
+    scipy's savemat silently writes [[None]] for dicts with non-string
+    keys, which would lose the whole tt/pltt/fuelcost path-info tables;
+    string keys round-trip fine (same fix as msa.py's rprime).
+    """
+    return {f"row{row:05d}_col{col:02d}": values
+            for (row, col), values in d.items()}
 
 
 def _group_agent_paths(agentpath):
@@ -886,6 +897,30 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
 
 
 
+    if itr == 18:
+
+
+
+        savemat(
+
+            f"DTALite_Files/pathinfo_ass{bigloop}.mat",
+
+            {
+
+                'len': route_length,
+
+                'tt': stringify_pathinfo_keys(tt),
+
+                'pltt': stringify_pathinfo_keys(pltt),
+
+                'fuelcost': stringify_pathinfo_keys(fuelcost),
+
+                'nc': nc
+
+            }
+
+        )
+
 
 
     phase = 6
@@ -970,6 +1005,23 @@ def _assignment_impl(itr, choiceset, user, routelocation, weights, meanstd28, me
     final_rposition = _rr
 
 
+
+
+    savemat(
+
+        f"bef_aft_realtime{itr}.mat",
+
+        {
+
+            'nchoice':np.array(nchoice),
+
+            'final_choice': np.array(final_choice),
+
+            'final_rposition': np.array(final_rposition)
+
+        }
+
+    )
 
 
 
@@ -1742,6 +1794,8 @@ def comassignment(
 
     num_tdlink_rows,
 
+    engine=None,
+
 ):
 
     import numpy as np
@@ -1751,6 +1805,8 @@ def comassignment(
     import scipy.io
 
     import os
+
+    _engine = _engine_mod.resolve(engine)
 
 
 
@@ -2497,6 +2553,32 @@ def comassignment(
 
 
 
+    # ------------------------------------------------------------------
+
+    # Save path information
+
+    # ------------------------------------------------------------------
+
+    scipy.io.savemat(
+
+        f"DTALite_Files/pathinfo_comass{bigloop}.mat",
+
+        {
+
+            "len": route_len,
+
+            "tt": stringify_pathinfo_keys(tt),
+
+            "pltt": stringify_pathinfo_keys(pltt),
+
+            "fuelcost": stringify_pathinfo_keys(fuelcost),
+
+            "nc": nc,
+
+        },
+
+    )
+
 
 
     # ------------------------------------------------------------------
@@ -2692,17 +2774,23 @@ def comassignment(
         # how a mid-assignment exit(0) stayed invisible. Keep this
         # phase's stdout/stderr in a log file next to the outputs.
         _phase_log = "DTALite_Files/dtalite_comassignment_phase%d.log" % subitr
-        try:
+        if _engine == "pysim":
             with open(_phase_log, "w") as _lf:
-                subprocess.run(
-                    [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
-                    stdin=subprocess.DEVNULL, timeout=_dtalite_timeout(),
-                    stdout=_lf, stderr=subprocess.STDOUT,
-                )
-        except subprocess.TimeoutExpired:
-            kill_dtalite_leftovers()
-            raise RuntimeError(
-                f"DTALite.exe timed out after {_dtalite_timeout()}s in comassignment phase {subitr}")
+                _engine_mod.run_pysim(
+                    "DTALite_Files", _dtalite_timeout(),
+                    "comassignment phase %d" % subitr, stdout=_lf)
+        else:
+            try:
+                with open(_phase_log, "w") as _lf:
+                    subprocess.run(
+                        [r"DTALite_Files/DTALite.exe"], cwd = 'DTALite_Files', check = True,
+                        stdin=subprocess.DEVNULL, timeout=_dtalite_timeout(),
+                        stdout=_lf, stderr=subprocess.STDOUT,
+                    )
+            except subprocess.TimeoutExpired:
+                kill_dtalite_leftovers()
+                raise RuntimeError(
+                    f"DTALite.exe timed out after {_dtalite_timeout()}s in comassignment phase {subitr}")
         check_dtalite_outputs("comassignment phase %d" % subitr, _phase_log)
 
         sanitize_dtalite_outputs()

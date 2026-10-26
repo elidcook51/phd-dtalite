@@ -77,6 +77,8 @@ Python 3.9, stdlib + numpy + pandas + scipy (+ openpyxl for xlsx).
 import argparse
 import csv
 import netconfig
+
+import engine as _engine_mod
 import os
 import shutil
 import subprocess
@@ -777,13 +779,32 @@ def dtalite_command(data_dir, exe_override):
          "plus wine)" % data_dir)
 
 
-def run_dtalite(data_dir, exe_override, timeout):
+def run_dtalite(data_dir, exe_override, timeout, engine=None):
     """Run DTALite once; fail fast with a clear error on any failure."""
+    if _engine_mod.resolve(engine) == "pysim":
+        try:
+            _engine_mod.pysim_command(data_dir)
+        except RuntimeError as exc:
+            fail(str(exc))
+        if exe_override:
+            fail("--exe is a DTALite executable override and cannot be "
+                 "combined with --engine pysim")
     for name in STALE_OUTPUTS:
         p = os.path.join(data_dir, name)
         if os.path.isfile(p):
             os.remove(p)
             print("removed stale %s" % name)
+    _engine = _engine_mod.resolve(engine)
+    if _engine == "pysim":
+        print("running PySim (%s) ..." % " ".join(
+            _engine_mod.pysim_command(data_dir)))
+        t0 = time.time()
+        try:
+            _engine_mod.run_pysim(data_dir, timeout, "preference_reaction")
+        except RuntimeError as exc:
+            fail(str(exc))
+        print("PySim finished in %.0f s" % (time.time() - t0))
+        return
     cmd = dtalite_command(data_dir, exe_override)
     print("running DTALite (%s) ..." % " ".join(cmd))
     t0 = time.time()
@@ -863,6 +884,9 @@ def parse_args(argv):
     p.add_argument("--exe", default=None,
                    help="DTALite executable override "
                         "(default: auto-detect in <data-dir>)")
+    p.add_argument("--engine", default="pysim",
+                   choices=["pysim", "dtalite"],
+                   help="simulation engine: pysim (default) or dtalite")
     p.add_argument("--timeout", type=int, default=3600,
                    help="seconds to wait for DTALite (default 3600)")
     p.add_argument("--standardize", dest="standardize", action="store_true",
@@ -1022,7 +1046,7 @@ def main(argv=None):
                      % (os.path.join(data_dir, AGENT_INPUT), n_agents))
 
     print("running DTALite ...")
-    run_dtalite(data_dir, args.exe, args.timeout)
+    run_dtalite(data_dir, args.exe, args.timeout, args.engine)
     log_lines.append("DTALite finished (rc=0)")
 
     vh, per_agent_min, n_out = vehicle_hours(data_dir)

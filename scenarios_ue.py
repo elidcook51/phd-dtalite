@@ -72,6 +72,8 @@ import time
 from pathlib import Path
 
 import netconfig
+
+import engine as _engine_mod
 import numpy as np
 import pandas as pd
 import scipy.io as sio
@@ -415,13 +417,36 @@ def dtalite_command(data_dir, exe_override, log):
                   "(need ./DTALite, or DTALite.exe plus wine)" % data_dir)
 
 
-def run_dtalite(data_dir, exe_override, timeout_s, log):
+def run_dtalite(data_dir, exe_override, timeout_s, log, engine=None):
+    if _engine_mod.resolve(engine) == "pysim":
+        try:
+            _engine_mod.pysim_command(data_dir)
+        except RuntimeError as exc:
+            raise UEError(str(exc))
+        if exe_override:
+            raise UEError(
+                "--exe is a DTALite executable override and cannot be "
+                "combined with --engine pysim")
     # Freshness discipline (from build B): delete stale outputs before each
     # run so nothing below can mistake a previous iteration's files for new.
     for name in STALE_OUTPUTS:
         p = data_dir / name
         if p.exists():
             p.unlink()
+    _engine = _engine_mod.resolve(engine)
+    if _engine == "pysim":
+        log("running PySim (%s) ..." % " ".join(
+            _engine_mod.pysim_command(data_dir)))
+        t0 = time.time()
+        try:
+            _engine_mod.run_pysim(data_dir, timeout_s, "scenarios_ue")
+        except RuntimeError as exc:
+            raise UEError(str(exc))
+        log("PySim finished in %.0f s" % (time.time() - t0))
+        refreshed = [name for name in STALE_OUTPUTS if (data_dir / name).exists()]
+        if not refreshed:
+            log("warning: PySim wrote none of the watched outputs")
+        return refreshed
     cmd = dtalite_command(data_dir, exe_override, log)
     log("running DTALite (%s) ..." % " ".join(cmd))
     t0 = time.time()
@@ -641,6 +666,9 @@ def main(argv=None):
     parser.add_argument("--demand-csv", default=None)
     parser.add_argument("--network-xlsx", default=None)
     parser.add_argument("--exe", default=None, help="DTALite executable override")
+    parser.add_argument("--engine", default="pysim",
+                        choices=["pysim", "dtalite"],
+                        help="simulation engine: pysim (default) or dtalite")
     parser.add_argument("--timeout", type=int, default=3600,
                         help="seconds to wait for one DTALite run")
     args = parser.parse_args(argv)
@@ -774,7 +802,7 @@ def _run(args, data_dir, result_dir, log, t_start):
         df.to_csv(data_dir / "input_agent.csv", index=False, lineterminator="\r\n")
 
     write_input()
-    refreshed = run_dtalite(data_dir, args.exe, args.timeout, log)
+    refreshed = run_dtalite(data_dir, args.exe, args.timeout, log, args.engine)
     link_time = load_link_times(data_dir, refreshed, freeflow, log)
 
     def shortest_routes():
@@ -824,7 +852,7 @@ def _run(args, data_dir, result_dir, log, t_start):
         idx = order[move]
         current_route[idx] = aux[idx]
         write_input()
-        refreshed = run_dtalite(data_dir, args.exe, args.timeout, log)
+        refreshed = run_dtalite(data_dir, args.exe, args.timeout, log, args.engine)
         link_time = load_link_times(data_dir, refreshed, freeflow, log)
         gap = relative_gap()                # Step 4: gap on FRESH link times
         iters_done = n

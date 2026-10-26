@@ -90,6 +90,15 @@ V9_SCRIPTS = ["runner_parallel.py", "parallel_msa.py", "msa.py",
               "traveltimecal.py", "progress.py", "choiceset.py",
               "netconfig.py"]
 
+# Simulation-engine files staged into EVERY sandbox alongside the scripts
+# above (setup_sandbox copies them for all tests, so the engine is
+# available wherever a script runs -- including inside RunX/ workers,
+# which resolve run_pysim.py and pysim/ from engine.py's own directory).
+# These are NOT part of the per-test script lists: they are engine
+# plumbing, not test logic, and every test needs them.
+ENGINE_FILES = ["engine.py", "run_pysim.py"]
+ENGINE_DIRS = ["pysim"]
+
 # Test registry. "kind" tells main() how to run the entry:
 #   "v9" / "scenario" -- one sandbox, one command sequence (run_test)
 #   "dual-sweep"      -- two parallel sandboxes + aggregation (Test 5)
@@ -399,8 +408,8 @@ def _parse_reaction_line(test, line, tracker, base):
     if "writing" in low and "input_agent" in low:
         tracker.update(test, base + span * 0.50, "reaction: writing input")
         return True
-    if "running dtalite" in low:
-        tracker.update(test, base + span * 0.70, "reaction: DTALite")
+    if "running dtalite" in low or "running pysim" in low:
+        tracker.update(test, base + span * 0.70, "reaction: engine")
         return True
     if "actual_routes" in low and "wrote" in low:
         tracker.update(test, base + span * 0.90, "reaction: routes written")
@@ -571,6 +580,16 @@ def setup_sandbox(name, data_dir, temp_root, scripts):
         if not os.path.isfile(src):
             raise RuntimeError("required script not found: %s" % src)
         shutil.copy2(src, sandbox)
+    for fn in ENGINE_FILES:
+        src = os.path.join(HERE, fn)
+        if not os.path.isfile(src):
+            raise RuntimeError("required engine file not found: %s" % src)
+        shutil.copy2(src, sandbox)
+    for dirname in ENGINE_DIRS:
+        src = os.path.join(HERE, dirname)
+        if not os.path.isdir(src):
+            raise RuntimeError("required engine dir not found: %s" % src)
+        shutil.copytree(src, os.path.join(sandbox, dirname))
     log("%s: sandbox ready (%s)" % (name, sandbox))
     return sandbox
 
@@ -594,7 +613,8 @@ def scripts_for_sweep(sub):
 # ----------------------------------------------------------------------
 # Per-test command lines
 # ----------------------------------------------------------------------
-def test1_commands(sandbox, seed, test1_mode="single", network="siouxfalls"):
+def test1_commands(sandbox, seed, test1_mode="single", network="siouxfalls",
+                    engine="pysim"):
     """Test 1 command lines.
 
     test1_mode="single": bigloop 10 only (100% MPR, the Test 1 case).
@@ -602,7 +622,7 @@ def test1_commands(sandbox, seed, test1_mode="single", network="siouxfalls"):
                          new runs should use --tests 5).
     """
     cmd = [PY, os.path.join(sandbox, "runner_parallel.py"),
-           "--seed", str(seed), "--network", network]
+           "--seed", str(seed), "--network", network, "--engine", engine]
     if test1_mode == "single":
         cmd += ["--bigloops", "10"]
         desc = "v9 pipeline (runner_parallel.py --bigloops 10)"
@@ -612,7 +632,8 @@ def test1_commands(sandbox, seed, test1_mode="single", network="siouxfalls"):
     return [(cmd, desc)]
 
 
-def test24_commands(test, sandbox, seed, network="siouxfalls", gap_threshold=0.0001):
+def test24_commands(test, sandbox, seed, network="siouxfalls", gap_threshold=0.0001,
+                      engine="pysim"):
     """Guidance scenario followed by the preference-reaction step."""
     staging = os.path.join(sandbox, "staging")
     os.makedirs(staging, exist_ok=True)
@@ -623,13 +644,15 @@ def test24_commands(test, sandbox, seed, network="siouxfalls", gap_threshold=0.0
         scenario = [PY, os.path.join(sandbox, "scenarios_realtime.py"),
                     "--sigma", str(cfg["sigma"]),
                     "--data-dir", data, "--result-dir", staging,
-                    "--seed", str(seed), "--network", network]
+                    "--seed", str(seed), "--network", network,
+                    "--engine", engine]
         scenario_desc = "real-time sigma=%d (guidance)" % cfg["sigma"]
         guidance_csv = os.path.join(staging, "realtime_routes.csv")
     else:  # test 4
         scenario = [PY, os.path.join(sandbox, "scenarios_ue.py"),
                     "--data-dir", data, "--result-dir", staging,
                     "--seed", str(seed), "--network", network,
+                    "--engine", engine,
                     "--gap-threshold", str(gap_threshold)]
         scenario_desc = "UE baseline (MSA guidance)"
         guidance_csv = os.path.join(staging, "ue_routes.csv")
@@ -639,17 +662,18 @@ def test24_commands(test, sandbox, seed, network="siouxfalls", gap_threshold=0.0
                 "--data-dir", data,
                 "--result-dir", staging,
                 "--target-satisfaction", str(cfg["target"]),
-                "--network", network]
+                "--network", network, "--engine", engine]
     return [(scenario, scenario_desc),
             (reaction, "preference reaction")]
 
 
-def test5_commands(sub, sandbox, seed, ue_routes_path=None, network="siouxfalls"):
+def test5_commands(sub, sandbox, seed, ue_routes_path=None, network="siouxfalls",
+                   engine="pysim"):
     """One [(cmd, desc)] entry per Test 5 sweep. sub is "P" or "U"."""
     if sub == "P":
         cmd = [PY, os.path.join(sandbox, "runner_parallel.py"),
                "--bigloops", "0-10", "--seed", str(seed),
-               "--network", network]
+               "--network", network, "--engine", engine]
         desc = "v9 pipeline (runner_parallel.py --bigloops 0-10, proposed MPR sweep)"
     else:
         if not ue_routes_path:
@@ -657,7 +681,7 @@ def test5_commands(sub, sandbox, seed, ue_routes_path=None, network="siouxfalls"
         cmd = [PY, os.path.join(sandbox, "runner_parallel_ue.py"),
                "--ue-routes", ue_routes_path,
                "--bigloops", "1-10", "--seed", str(seed),
-               "--network", network]
+               "--network", network, "--engine", engine]
         desc = "UE-guidance MPR sweep (runner_parallel_ue.py --bigloops 1-10)"
     return [(cmd, desc)]
 
@@ -866,24 +890,26 @@ def _run_commands(label, sandbox, cmds, tracker, key, parse_line):
     return True, dt
 
 def run_test(test, sandbox, tracker=None, seed=42, test1_mode="single",
-           network="siouxfalls", gap_threshold=0.0001):
+           network="siouxfalls", gap_threshold=0.0001, engine="pysim"):
     """Run one test's command sequence inside its sandbox. Returns
     (ok, elapsed)."""
     cfg = TESTS[test]
     if test == 1:
-        cmds = test1_commands(sandbox, seed, test1_mode, network)
+        cmds = test1_commands(sandbox, seed, test1_mode, network, engine)
     else:
-        cmds = test24_commands(test, sandbox, seed, network, gap_threshold)
+        cmds = test24_commands(test, sandbox, seed, network, gap_threshold,
+                               engine)
     return _run_commands(cfg["label"], sandbox, cmds, tracker, test,
                          lambda i, line: parse_progress_line(test, i, line, tracker))
 
 
 def run_sweep(sub, sandbox, tracker, seed, ue_routes_path=None,
-            network="siouxfalls"):
+            network="siouxfalls", engine="pysim"):
     """Run one Test 5 sweep (sub "P"/"U"). Returns (ok, elapsed)."""
     key = "5" + sub
     label = "Test 5 (%s)" % TESTS[5]["subs"][sub]["label"]
-    cmds = test5_commands(sub, sandbox, seed, ue_routes_path, network)
+    cmds = test5_commands(sub, sandbox, seed, ue_routes_path, network,
+                          engine)
     return _run_commands(label, sandbox, cmds, tracker, key,
                          lambda i, line: parse_progress_line(key, i, line, tracker))
 
@@ -891,6 +917,16 @@ def run_sweep(sub, sandbox, tracker, seed, ue_routes_path=None,
 # ----------------------------------------------------------------------
 # Result collection
 # ----------------------------------------------------------------------
+def _collect_engine_log(sandbox, out_dir):
+    """Copy the sandbox's engine_calls.log (PySim audit trail) into the
+    results, when one exists. Under --engine dtalite there is no such
+    file and this is a no-op."""
+    src = os.path.join(sandbox, "engine_calls.log")
+    if os.path.isfile(src):
+        os.makedirs(out_dir, exist_ok=True)
+        shutil.copy2(src, os.path.join(out_dir, "engine_calls.log"))
+
+
 def collect_234(test, sandbox, results_root):
     """Copy staging summaries/routes, predicted_LinkMOE.csv and
     output_*.csv for Tests 2-4."""
@@ -915,6 +951,7 @@ def collect_234(test, sandbox, results_root):
     for src in sorted(glob.glob(os.path.join(data, "output_*.csv"))):
         shutil.copy2(src, os.path.join(full, os.path.basename(src)))
         n_csv += 1
+    _collect_engine_log(sandbox, out)
     log("test %d: collected %d files -> %s, %d output_*.csv -> full_results/"
         % (test, len(copied), out, n_csv))
 
@@ -946,6 +983,7 @@ def collect_1(sandbox, results_root):
 
     summary_path = os.path.join(out, "proposed_summary.txt")
     generate_proposed_summary(n, full, summary_path)
+    _collect_engine_log(sandbox, out)
     log("test 1: wrote %s" % summary_path)
 
 
@@ -989,6 +1027,8 @@ def collect_5(sub, sandbox, results_root):
         collected.append(n)
     log("test 5%s: collected %d/%d bigloops"
         % (sub, len(collected), 11 - lo))
+    _collect_engine_log(
+        sandbox, os.path.join(results_root, "test5", sweep_name))
     return collected
 
 
@@ -1300,6 +1340,11 @@ def parse_args(argv=None):
                     choices=["siouxfalls", "baltimore"],
                     help="network: siouxfalls (default) or baltimore "
                          "(use with --data-dir baltimore_files)")
+    ap.add_argument("--engine", default="pysim",
+                    choices=["pysim", "dtalite"],
+                    help="simulation engine: pysim (default) or dtalite "
+                         "(dtalite runs the DTALite executable exactly as "
+                         "before; pysim runs the Python port)")
     ap.add_argument("--results-dir", default="results",
                     help="output root (default: results)")
     ap.add_argument("--keep-temp", action="store_true",
@@ -1426,7 +1471,8 @@ def main(argv=None):
                 ue_routes_pre = None
             else:
                 _ok_dep4, _dt_dep4 = run_test(4, _sb_dep4, None, args.seed,
-                                              "single", args.network)
+                                              "single", args.network,
+                                              args.gap_threshold, args.engine)
                 if _ok_dep4:
                     try:
                         collect_234(4, _sb_dep4, results_root)
@@ -1460,6 +1506,7 @@ def main(argv=None):
     stop_event = threading.Event()
     display_thread = None
 
+    log("Engine: %s" % args.engine)
     log("Tests: %s (keys: %s)" % (tests, keys))
     log("Seed: %d (all tests)" % args.seed)
     if 1 in tests:
@@ -1602,7 +1649,8 @@ def main(argv=None):
             log("Test 5: starting UE sweep (5U) -- ue_routes.csv ready")
             _f5u = ex.submit(
                 run_sweep, "U", sb5u, tracker, args.seed,
-                os.path.join(sb5u, "ue_routes.csv"), args.network)
+                os.path.join(sb5u, "ue_routes.csv"), args.network,
+                args.engine)
             futures[_f5u] = ("sweep", "5U")
             log("Test 5: 5U sweep submitted to executor")
 
@@ -1682,11 +1730,11 @@ def main(argv=None):
                 if t in (1, 2, 3, 4):
                     fut = ex.submit(run_test, t, sandboxes[t], tracker,
                                     args.seed, args.test1_mode, args.network,
-                                    args.gap_threshold)
+                                    args.gap_threshold, args.engine)
                     futures[fut] = ("test", t)
             if 5 in tests:
                 fut = ex.submit(run_sweep, "P", sandboxes["5P"], tracker,
-                                args.seed, None, args.network)
+                                args.seed, None, args.network, args.engine)
                 futures[fut] = ("sweep", "5P")
             # 5U sandbox was set up in Phase A setup (if ue_routes.csv
             # was pre-resolved). Submit it here, into the shared dict.
@@ -1696,7 +1744,7 @@ def main(argv=None):
                 _fut5u = ex.submit(
                     run_sweep, "U", sandboxes["5U"], tracker, args.seed,
                     os.path.join(sandboxes["5U"], "ue_routes.csv"),
-                    args.network)
+                    args.network, args.engine)
                 futures[_fut5u] = ("sweep", "5U")
                 log("Test 5: 5U sweep submitted to executor")
 
