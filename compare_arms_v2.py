@@ -26,10 +26,10 @@ Comparison rules:
   - Emissions columns (TotalEnergy, CO2, NOX, CO, HC, PM) are REPORT-ONLY:
     PySim has no VSP post-pass, so its per-agent emissions differ from
     DTALite's by design. They never flip the verdict.
-  - Summary .txt files are compared with both roots masked out; any
-    difference is a WARN, never a FAIL (summaries can carry run metadata,
-    and every number they carry is derived from the CSVs, which are
-    compared exactly).
+  - Summary .txt files are compared with both roots and run_<digits>
+    temp segments masked out; any difference is a WARN, never a FAIL
+    (summaries can carry run metadata, and every number they carry is
+    derived from the CSVs, which are compared exactly).
   - Missing core files (the 9 test1/test5 CSVs, mpr tables, test6 CSV)
     FAIL. A missing output_*.csv in test2/3/4 full_results is a WARN:
     PySim's output repertoire may legitimately be a subset.
@@ -38,6 +38,18 @@ Comparison rules:
 
 Exit code: 0 when no FAIL items, 1 otherwise. Stdlib only, Python 3.9
 compatible. Files are read fully into memory; fine at Sioux Falls scale.
+
+v2 changes (over v1): columns whose cells are semicolon-joined floats
+(path_time_sequence) are compared element-wise with an extra 0.055
+allowance, the maximum difference between 1-decimal and 2-decimal
+roundings of the same value, so 1-decimal vs 2-decimal formatting does
+not fail rows; differences below that cannot be resolved from 1-decimal
+output. Emissions detection also matches header tokens (co, co2, nox,
+hc, pm, totalenergy), catching CO_(g / hr), total_CO, total_CO2 without
+catching count columns; CPU Clock rows are dropped from
+output_day_to_day_MOE.csv before comparison; summary masking also
+folds run_<digits> temp segments; numeric mismatch notes list the top
+columns by mismatch count.
 """
 
 import argparse
@@ -57,14 +69,29 @@ TAGS = ("UOinfor", "predict", "actual")
 KINDS = ("agent", "LinkMOE", "LinkTDMOE")
 EMISSION_STEMS = ("totalenergy", "co2", "nox", "hc", "pm")
 EMISSION_EXACT = ("co", "cog")
+EMISSION_TOKENS = {"co", "co2", "nox", "hc", "pm", "totalenergy"}
+# Maximum |1-decimal rounding - 2-decimal rounding| of the same value
+# (0.05 + 0.005). Numeric-list columns allow this on top of atol/rtol;
+# smaller real differences cannot be resolved from 1-decimal output.
+LIST_ROUND_TOL = 0.055
 
 
 def norm_col(name):
     return re.sub(r"[^a-z0-9]", "", name.strip().lower())
 
 
-def is_emission(norm):
-    return norm in EMISSION_EXACT or norm.startswith(EMISSION_STEMS)
+def col_tokens(name):
+    return [t for t in re.split(r"[^a-z0-9]+", name.strip().lower()) if t]
+
+
+def is_emission(name):
+    """Emissions column? Stem/exact match on the squashed name, or any
+    header token in EMISSION_TOKENS. Token matching catches CO_(g / hr)
+    (tokens co, g, hr) and total_CO (total, co) without catching
+    cumulative_out_flow_count (cumulative, out, flow, count)."""
+    norm = norm_col(name)
+    return (norm in EMISSION_EXACT or norm.startswith(EMISSION_STEMS)
+            or bool(set(col_tokens(name)) & EMISSION_TOKENS))
 
 
 def is_path(norm):
@@ -79,6 +106,43 @@ def parse_float(text):
     if math.isnan(value) or math.isinf(value):
         return None
     return value
+
+
+def parse_num_list(text):
+    """Parse a semicolon-joined float list, e.g. '360.0;367.9;'.
+    Returns a list of floats, or None when the shape does not match
+    (no ';', an empty part other than trailing ';', a non-numeric part).
+    An empty cell returns None; callers treat empty-vs-empty as equal."""
+    if text is None:
+        return None
+    stripped = text.strip()
+    if ";" not in stripped:
+        return None
+    parts = stripped.split(";")
+    while parts and parts[-1].strip() == "":
+        parts.pop()
+    if not parts:
+        return None
+    values = []
+    for part in parts:
+        value = parse_float(part)
+        if value is None:
+            return None
+        values.append(value)
+    return values
+
+
+def is_num_list_column(cells):
+    """True when sampled non-empty cells are all semicolon-joined float
+    lists and at least one contains a decimal point. The decimal-point
+    requirement keeps integer lists (path_node_sequence, '1;2;3') on
+    exact string comparison."""
+    sampled = [c for c in cells if c.strip() != ""]
+    if not sampled:
+        return False
+    if not any("." in c for c in sampled):
+        return False
+    return all(parse_num_list(c) is not None for c in sampled)
 
 
 def read_csv(path):
@@ -140,8 +204,24 @@ def compare_csv(pa, pb, label, atol, rtol):
         res.fail("header mismatch (pysim-only: %s; dtalite-only: %s)"
                  % (only_a[:5], only_b[:5]))
         return res
+    if os.path.basename(pa) == "output_day_to_day_MOE.csv":
+        na_before, nb_before = len(rows_a), len(rows_b)
+        rows_a = [r for r in rows_a
+                  if not any("CPU Clock" in c for c in r)]
+        rows_b = [r for r in rows_b
+                  if not any("CPU Clock" in c for c in r)]
+        dropped = (na_before - len(rows_a)) + (nb_before - len(rows_b))
+        if dropped:
+            res.notes.append("dropped %d CPU Clock rows (runtime metadata)"
+                             % dropped)
     width = len(ha)
     norms = [norm_col(h) for h in ha]
+    num_list_cols = set()
+    for j in range(width):
+        cells = [r[j] for r in rows_a[:100] if len(r) > j]
+        cells += [r[j] for r in rows_b[:100] if len(r) > j]
+        if is_num_list_column(cells):
+            num_list_cols.add(j)
     rows_a = [pad(r, width) for r in rows_a]
     rows_b = [pad(r, width) for r in rows_b]
     if len(rows_a) != len(rows_b):
@@ -181,6 +261,7 @@ def compare_csv(pa, pb, label, atol, rtol):
     res.notes.append("mode=%s rows pysim=%d dtalite=%d"
                      % (mode, len(rows_a), len(rows_b)))
     n_num_bad = 0
+    num_bad_by_col = Counter()
     max_diff = 0.0
     max_where = ""
     n_str_bad = 0
@@ -194,7 +275,7 @@ def compare_csv(pa, pb, label, atol, rtol):
         for j in range(width):
             norm = norms[j]
             va, vb = ra[j], rb[j]
-            if is_emission(norm):
+            if is_emission(ha[j]):
                 fa, fb = parse_float(va), parse_float(vb)
                 n_em += 1
                 if fa is not None and fb is not None:
@@ -205,11 +286,57 @@ def compare_csv(pa, pb, label, atol, rtol):
                 elif va.strip() != vb.strip():
                     n_em_bad += 1
                 continue
+            if j in num_list_cols:
+                la, lb = parse_num_list(va), parse_num_list(vb)
+                if la is None and lb is None:
+                    if va.strip() != vb.strip():
+                        n_str_bad += 1
+                        if len(str_examples) < 5:
+                            str_examples.append(
+                                "key=%s col=%s pysim=%r dtalite=%r"
+                                % (ra[0], ha[j], va, vb))
+                        if is_path(norm):
+                            n_path_bad += 1
+                elif la is None or lb is None:
+                    n_num_bad += 1
+                    num_bad_by_col[ha[j]] += 1
+                    if not max_where:
+                        max_where = ("key=%s col=%s not a numeric list on "
+                                     "one side pysim=%r dtalite=%r"
+                                     % (ra[0], ha[j], va, vb))
+                    if is_path(norm):
+                        n_path_bad += 1
+                elif len(la) != len(lb):
+                    n_num_bad += 1
+                    num_bad_by_col[ha[j]] += 1
+                    if not max_where:
+                        max_where = ("key=%s col=%s length pysim=%d "
+                                     "dtalite=%d"
+                                     % (ra[0], ha[j], len(la), len(lb)))
+                    if is_path(norm):
+                        n_path_bad += 1
+                else:
+                    for k, (x, y) in enumerate(zip(la, lb)):
+                        d = abs(x - y)
+                        if d > LIST_ROUND_TOL + atol + rtol * abs(y):
+                            n_num_bad += 1
+                            num_bad_by_col[ha[j]] += 1
+                            if d > max_diff:
+                                max_diff = d
+                                max_where = ("key=%s col=%s elem=%d "
+                                             "pysim=%s dtalite=%s"
+                                             % (ra[0], ha[j], k, va, vb))
+                            if is_path(norm):
+                                n_path_bad += 1
+                if is_path(norm):
+                    n_path += 1
+                continue
             fa, fb = parse_float(va), parse_float(vb)
             if fa is not None and fb is not None:
                 d = abs(fa - fb)
                 if d > atol + rtol * abs(fb):
                     n_num_bad += 1
+                    num_bad_by_col[ha[j]] += 1
                     if d > max_diff:
                         max_diff = d
                         max_where = "key=%s col=%s pysim=%s dtalite=%s" % (
@@ -228,6 +355,10 @@ def compare_csv(pa, pb, label, atol, rtol):
     if n_num_bad:
         res.fail("numeric mismatches: %d (max abs diff %.6g at %s)"
                  % (n_num_bad, max_diff, max_where))
+        res.notes.append("numeric mismatches by column: %s"
+                         % ", ".join("%s (%d)" % (col, cnt)
+                                     for col, cnt in
+                                     num_bad_by_col.most_common(5)))
     if n_str_bad:
         res.fail("string mismatches: %d (e.g. %s)"
                  % (n_str_bad, "; ".join(str_examples)))
@@ -262,13 +393,15 @@ def compare_text(pa, pb, label, roots):
         for root in roots:
             if root:
                 text = text.replace(root, "<ROOT>")
+        text = re.sub(r"run_\d+", "<RUN>", text)
         lines = [ln.rstrip() for ln in text.splitlines()]
         while lines and lines[-1] == "":
             lines.pop()
         masked.append(lines)
     la, lb = masked
     if la == lb:
-        res.notes.append("identical (%d lines, roots masked)" % len(la))
+        res.notes.append("identical (%d lines, roots and run ids masked)"
+                         % len(la))
         return res
     n_diff = 0
     examples = []
