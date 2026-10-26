@@ -358,17 +358,6 @@ def _baltimore_adjacency():
     return adj
 
 
-def stringify_rprime_keys(rprime):
-    """Convert rprime's (route, od, interval, itr) tuple keys to strings.
-
-    scipy's savemat silently writes [[None]] for dicts with non-string keys,
-    which would lose the whole per-route/OD/interval demand tensor; string
-    keys round-trip fine. Keys are 0-based (route, od, interval, itr).
-    """
-    return {
-        f"r{route:03d}_od{od:03d}_t{interval:02d}_itr{itr:02d}": count
-        for (route, od, interval, itr), count in rprime.items()
-    }
 
 
 
@@ -667,9 +656,6 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls',
 
 
 
-    linkV = []
-
-    rprime = {}
 
 
 
@@ -740,23 +726,6 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls',
 
 
 
-        # bprime columns: 0 = OD index, 1 = route index (both transposed
-        # convention), 2 = departure time, 3 = origin, 4 = destination.
-        # MATLAB's bprime(:,1) is the route index; here the route lives in
-        # column 1 because the transposed choiceset swaps the two indices.
-        bprime = np.column_stack([
-
-            choice,
-
-            final_rposition,
-
-            a[:,0],
-
-            a[:,1],
-
-            a[:,2]
-
-        ])
 
 
 
@@ -885,110 +854,6 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls',
 
 
             return normalized_path, nodes
-
-
-
-
-
-        # =====================================================
-        # Build rprime for every OD column
-        # (MATLAB: rprime{i,h}(j,itr) -- demand on route i of OD h
-        #  in period j. Keys here are 0-based (route, od, period, itr).)
-        #
-        # Vectorized: the old code ran one np.where scan over all
-        # of bprime for every (od, route, interval) triple. This
-        # counts the same matches in a single pass -- the same
-        # five-way equality per row, tallied through a composite
-        # integer key and np.bincount. Counts are exact integers,
-        # zeros included, and keys are inserted in the same
-        # od/route/interval order as before.
-        # =====================================================
-
-        # Normalize each choiceset cell once. The first valid
-        # route in a column sets that column's origin/destination,
-        # as before; a cell with no valid path gets no entries.
-        od_origin = np.full(n_od, np.nan)
-        od_destination = np.full(n_od, np.nan)
-        route_nodes = [[None] * n_routes for _ in range(n_od)]
-
-        for od_idx in range(n_od):
-
-            for route_idx in range(n_routes):
-
-                _, cell_nodes = normalize_route_path(
-                    choiceset[od_idx, route_idx]
-                )
-
-                route_nodes[od_idx][route_idx] = cell_nodes
-
-                if cell_nodes is not None and np.isnan(od_origin[od_idx]):
-                    od_origin[od_idx] = float(cell_nodes[0])
-                    od_destination[od_idx] = float(cell_nodes[-1])
-
-        # A bprime row counts toward (route, od, interval) only
-        # under the same five-way equality the np.where version
-        # used: od and route indices whole and in range, departure
-        # period exactly TIME_START + interval for an interval in
-        # 0..59, and the row's origin/destination equal to the OD
-        # column's choice-path endpoints.
-        od_f = bprime[:, 0]
-        route_f = bprime[:, 1]
-        interval_f = bprime[:, 2] - netconfig.TIME_START
-
-        row_ok = (
-            (od_f == np.floor(od_f)) & (od_f >= 0) & (od_f < n_od)
-            & (route_f == np.floor(route_f)) & (route_f >= 0)
-            & (route_f < n_routes)
-            & (interval_f == np.floor(interval_f))
-            & (interval_f >= 0) & (interval_f < 60)
-        )
-
-        # Rows failing row_ok (NaN or out-of-range indices) are
-        # never counted; sanitize their indices so the endpoint
-        # lookup and the composite key stay in range.
-        od_i = np.clip(
-            np.nan_to_num(od_f, nan=0.0, posinf=0.0, neginf=0.0),
-            0, max(n_od - 1, 0)).astype(np.int64)
-        route_i = np.clip(
-            np.nan_to_num(route_f, nan=0.0, posinf=0.0, neginf=0.0),
-            0, max(n_routes - 1, 0)).astype(np.int64)
-        interval_i = np.clip(
-            np.nan_to_num(interval_f, nan=0.0, posinf=0.0, neginf=0.0),
-            0, 59).astype(np.int64)
-
-        if n_od:
-            row_ok &= (
-                (bprime[:, 3] == od_origin[od_i])
-                & (bprime[:, 4] == od_destination[od_i])
-            )
-
-        row_key = (od_i * n_routes + route_i) * 60 + interval_i
-
-        counts = np.bincount(
-            row_key[row_ok], minlength=n_od * n_routes * 60
-        ).reshape(n_od, n_routes, 60)
-
-        for od_idx in range(n_od):
-
-            if np.isnan(od_origin[od_idx]):
-                continue
-
-            for route_idx in range(n_routes):
-
-                if route_nodes[od_idx][route_idx] is None:
-                    continue
-
-                for interval, count in enumerate(
-                        counts[od_idx, route_idx].tolist()):
-
-                    rprime[
-                        (
-                            route_idx,
-                            od_idx,
-                            interval,
-                            itr
-                        )
-                    ] = count
 
 
 
@@ -1136,14 +1001,6 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls',
 
 
 
-        # MATLAB reads output_LinkMOE.csv col 8 (total_link_volume, one row
-        # per link), not output_LinkTDMOE.csv col 8 (link x timestamp
-        # in-volume). Select the column by name, not position.
-        dd = pd.read_csv('DTALite_Files/output_LinkMOE.csv')
-
-
-
-        linkV.append(dd['total_link_volume'].to_numpy())
 
 
 
@@ -1157,23 +1014,6 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls',
 
 
 
-    shutil.copyfile(
-
-        'DTALite_Files/output_LinkMOE.csv',
-
-        f"DTALite_Files/{bigloop}UOinfor_LinkMOE.csv"
-
-    )
-
-
-
-    shutil.copyfile(
-
-        'DTALite_Files/output_LinkTDMOE.csv',
-
-        f"DTALite_Files/{bigloop}UOinfor_LinkTDMOE.csv"
-
-    )
 
 
 
@@ -1304,13 +1144,6 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls',
 
 
 
-    shutil.copyfile(
-
-        'DTALite_Files/output_agent.csv',
-
-        f"DTALite_Files/{bigloop}predict_agent.csv"
-
-    )
 
 
 
@@ -1324,13 +1157,6 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls',
 
 
 
-    shutil.copyfile(
-
-        'DTALite_Files/output_LinkTDMOE.csv',
-
-        f"DTALite_Files/{bigloop}predict_LinkTDMOE.csv"
-
-    )
 
 
 
@@ -1470,37 +1296,9 @@ def msa(bigloop, p, p_fix, p_realtime, seed=1, network='siouxfalls',
 
 
 
-    shutil.copyfile(
-
-        'DTALite_Files/output_LinkTDMOE.csv',
-
-        f"DTALite_Files/{bigloop}actual_LinkTDMOE.csv"
-
-    )
 
 
 
-    savemat(
-
-        f"DTALite_Files/myfile{bigloop}.mat",
-
-        {
-
-            'cc': cc,
-
-            'rprime': stringify_rprime_keys(rprime),
-
-            'linkV': np.column_stack(linkV),
-
-            'choice': com_choice,
-
-            'position': com_rposition,
-
-            'pre_choice': pre_choice
-
-        }
-
-    )
     _pbar.set_description(f"Bigloop {bigloop} done")
     _pbar.update(1)
     _pbar.close()
